@@ -1,0 +1,448 @@
+using Npgsql;
+
+namespace ProjectTime.Api.Ai;
+
+public sealed class PulseAiPrivateRuntimeSourceResolver
+{
+    private static readonly HashSet<string> BroadRoles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SUPER_ADMINISTRATOR",
+        "ADMINISTRATOR",
+        "PROJECT_TEAM_COORDINATOR",
+        "EXECUTIVE"
+    };
+
+    private readonly ILogger<PulseAiPrivateRuntimeSourceResolver> _logger;
+
+    public PulseAiPrivateRuntimeSourceResolver(
+        ILogger<PulseAiPrivateRuntimeSourceResolver> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<PulseAiAuthorizedDocumentSource?> ResolveAsync(
+        Guid effectiveUserId,
+        Guid documentId,
+        CancellationToken cancellationToken = default,
+        bool processingAdmission = false,
+        bool classificationAdmission = false)
+    {
+        if (MissingDatabaseConfiguration().Count > 0) return null;
+        try
+        {
+            await using var connection = new NpgsqlConnection(ConnectionString());
+            await connection.OpenAsync(cancellationToken);
+            var access = await LoadAccessAsync(connection, effectiveUserId, cancellationToken);
+            if (!access.IsActive) return null;
+
+            const string sql = """
+                SELECT
+                    d.project_intake_document_id,
+                    d.project_id,
+                    COALESCE(p.project_code, ''),
+                    COALESCE(p.project_name, 'Unassigned document'),
+                    COALESCE(c.client_name, 'No customer'),
+                    COALESCE(d.document_type, 'other'),
+                    LOWER(COALESCE(d.document_category, d.document_type, 'other')),
+                    d.original_file_name,
+                    d.stored_file_name,
+                    d.storage_path,
+                    d.content_type,
+                    COALESCE(d.size_bytes, 0)::bigint,
+                    COALESCE(d.engineering_visible, FALSE),
+                    COALESCE(d.ai_timesheet_context_enabled, FALSE),
+                    COALESCE(d.extraction_status, 'not_started'),
+                    (
+                        NULLIF(BTRIM(COALESCE(d.ai_context_summary, '')), '') IS NOT NULL
+                        AND LOWER(COALESCE(d.extraction_status, '')) IN ('completed','ready','indexed','processed')
+                    ),
+                    d.ai_context_last_processed_at,
+                    d.uploaded_at,
+                    COALESCE(d.upload_source, 'manual'),
+                    COALESCE(d.pulse_ai_classification,
+                        CASE
+                            WHEN LOWER(COALESCE(d.document_category, d.document_type, 'other')) IN (
+                                'sow','statement_of_work','gsd','global_solution_design',
+                                'contract','rate','pricing'
+                            ) THEN 'restricted_internal_document'
+                            WHEN LOWER(COALESCE(d.document_category, d.document_type, 'other')) IN (
+                                'architecture','design','order','quote','proposal'
+                            ) THEN 'confidential_project_document'
+                            ELSE 'internal_project_document'
+                        END),
+                    d.work_register_document_id,
+                    COALESCE(work_register.stored_file_path, '')
+                FROM project_intake_documents d
+                LEFT JOIN projects p ON p.project_id = d.project_id
+                LEFT JOIN clients c ON c.client_id = p.client_id
+                LEFT JOIN work_register_documents work_register
+                  ON work_register.work_register_document_id = d.work_register_document_id
+                 AND work_register.project_id = d.project_id
+                WHERE d.project_intake_document_id = @document_id
+                  AND d.is_active = TRUE
+                  AND (
+                    d.project_id IS NOT NULL
+                    OR (
+                        (@processing_admission = TRUE OR @classification_admission = TRUE)
+                        AND @can_queue = TRUE
+                        AND (
+                            @is_service_principal = TRUE
+                            OR EXISTS (
+                                SELECT 1
+                                FROM pulse_ai_document_processing_jobs processing_job
+                                WHERE processing_job.project_intake_document_id = d.project_intake_document_id
+                                  AND (processing_job.actual_user_id = @user_id
+                                       OR processing_job.effective_user_id = @user_id
+                                       OR processing_job.requested_by_user_id = @user_id)
+                                  AND processing_job.job_status NOT IN ('cancelled','quarantined')
+                            )
+                            OR EXISTS (
+                                SELECT 1
+                                FROM pulse_ai_laya_classification_jobs classification_job
+                                WHERE classification_job.project_intake_document_id = d.project_intake_document_id
+                                  AND classification_job.service_principal_user_id = @user_id
+                                  AND classification_job.job_status IN ('queued','running','retry_wait')
+                            )
+                        )
+                    )
+                  )
+                  AND (
+                    COALESCE(d.engineering_visible, FALSE) = TRUE
+                    OR (
+                        @processing_admission = TRUE
+                        AND @can_queue = TRUE
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pulse_ai_document_processing_jobs processing_job
+                            WHERE processing_job.project_intake_document_id = d.project_intake_document_id
+                              AND (processing_job.actual_user_id = @user_id
+                                   OR processing_job.effective_user_id = @user_id
+                                   OR processing_job.requested_by_user_id = @user_id)
+                              AND processing_job.job_status NOT IN ('cancelled','quarantined')
+                        )
+                    )
+                    OR (
+                        @classification_admission = TRUE
+                        AND @can_queue = TRUE
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pulse_ai_laya_classification_jobs classification_job
+                            WHERE classification_job.project_intake_document_id = d.project_intake_document_id
+                              AND classification_job.document_version_id = d.pulse_ai_active_version_id
+                              AND classification_job.service_principal_user_id = @user_id
+                              AND classification_job.job_status IN ('queued','running','retry_wait')
+                        )
+                    )
+                    OR (
+                        @processing_admission = TRUE
+                        AND @can_queue = TRUE
+                        AND @is_service_principal = TRUE
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pulse_ai_document_processing_jobs processing_job
+                            WHERE processing_job.project_intake_document_id = d.project_intake_document_id
+                              AND processing_job.job_status NOT IN ('cancelled','quarantined')
+                        )
+                    )
+                  )
+                  AND (
+                    @is_broad = TRUE
+                    OR (
+                        @processing_admission = TRUE
+                        AND @can_queue = TRUE
+                        AND @is_service_principal = TRUE
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pulse_ai_document_processing_jobs processing_job
+                            WHERE processing_job.project_intake_document_id = d.project_intake_document_id
+                              AND processing_job.job_status NOT IN ('cancelled','quarantined')
+                        )
+                    )
+                    OR (
+                        @processing_admission = TRUE
+                        AND @can_queue = TRUE
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pulse_ai_document_processing_jobs processing_job
+                            WHERE processing_job.project_intake_document_id = d.project_intake_document_id
+                              AND (processing_job.actual_user_id = @user_id
+                                   OR processing_job.effective_user_id = @user_id
+                                   OR processing_job.requested_by_user_id = @user_id)
+                              AND processing_job.job_status NOT IN ('cancelled','quarantined')
+                        )
+                    )
+                    OR (
+                        @classification_admission = TRUE
+                        AND @can_queue = TRUE
+                        AND EXISTS (
+                            SELECT 1
+                            FROM pulse_ai_laya_classification_jobs classification_job
+                            WHERE classification_job.project_intake_document_id = d.project_intake_document_id
+                              AND classification_job.document_version_id = d.pulse_ai_active_version_id
+                              AND classification_job.service_principal_user_id = @user_id
+                              AND classification_job.job_status IN ('queued','running','retry_wait')
+                        )
+                    )
+                    OR p.project_manager_user_id = @user_id
+                    OR EXISTS (
+                        SELECT 1 FROM project_assignments pa
+                        WHERE pa.project_id = p.project_id
+                          AND pa.user_id = @user_id
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM engineering_resource_requests err
+                        WHERE err.project_id = p.project_id
+                          AND (
+                            err.fulfilled_by_user_id = @user_id
+                            OR err.assigned_pm_user_id = @user_id
+                            OR EXISTS (
+                                SELECT 1
+                                FROM engineering_resource_request_assignments erra
+                                WHERE erra.engineering_resource_request_id = err.engineering_resource_request_id
+                                  AND erra.user_id = @user_id
+                            )
+                          )
+                    )
+                  )
+                LIMIT 1;
+                """;
+            await using var command = new NpgsqlCommand(sql, connection);
+            command.Parameters.AddWithValue("document_id", documentId);
+            command.Parameters.AddWithValue("is_broad", access.IsBroadScope);
+            command.Parameters.AddWithValue("processing_admission", processingAdmission);
+            command.Parameters.AddWithValue("classification_admission", classificationAdmission);
+            command.Parameters.AddWithValue("can_queue", access.CanQueue);
+            command.Parameters.AddWithValue("is_service_principal", access.IsDocumentServicePrincipal);
+            command.Parameters.AddWithValue("user_id", effectiveUserId);
+            await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            {
+                if (await reader.ReadAsync(cancellationToken))
+                    return ReadProjectSource(reader, access.ScopeLabel, access.RoleCodes);
+            }
+
+            // Conversation attachments deliberately do not inherit broad
+            // project-document scope. Only the active conversation owner can
+            // authorize the worker to read the stored file.
+            if (!access.PermissionCodes.Contains(CelarAiConversationAttachmentPolicy.Permission)
+                && !PulseAiRoleAuthority.HasAdministratorRole(access.RoleCodes))
+            {
+                return null;
+            }
+            const string attachmentSql = """
+                SELECT
+                    document.project_intake_document_id,
+                    NULL::uuid,
+                    ''::text,
+                    'Celar AI conversation attachment'::text,
+                    ''::text,
+                    COALESCE(document.document_type, 'chat_attachment'),
+                    LOWER(COALESCE(document.document_category, 'chat_attachment')),
+                    document.original_file_name,
+                    document.stored_file_name,
+                    document.storage_path,
+                    document.content_type,
+                    COALESCE(document.size_bytes, 0)::bigint,
+                    FALSE,
+                    FALSE,
+                    COALESCE(document.extraction_status, 'not_started'),
+                    FALSE,
+                    document.ai_context_last_processed_at,
+                    document.uploaded_at,
+                    COALESCE(document.upload_source, 'celar_ai_chat_attachment'),
+                    COALESCE(document.pulse_ai_classification, 'restricted_conversation_attachment')
+                FROM project_intake_documents document
+                JOIN pulse_ai_conversation_attachments attachment
+                  ON attachment.project_intake_document_id = document.project_intake_document_id
+                JOIN pulse_ai_conversations conversation
+                  ON conversation.pulse_ai_conversation_id = attachment.pulse_ai_conversation_id
+                WHERE document.project_intake_document_id = @document_id
+                  AND document.upload_source = 'celar_ai_chat_attachment'
+                  AND document.uploaded_by_user_id = @user_id
+                  AND document.is_active = TRUE
+                  AND attachment.uploaded_by_user_id = @user_id
+                  AND attachment.revoked_at IS NULL
+                  AND attachment.retention_until > NOW()
+                  AND conversation.actual_user_id = @user_id
+                  AND conversation.effective_user_id = @user_id
+                  AND conversation.status = 'active'
+                  AND (conversation.retention_until IS NULL OR conversation.retention_until > NOW())
+                LIMIT 1;
+                """;
+            await using var attachmentCommand = new NpgsqlCommand(attachmentSql, connection);
+            attachmentCommand.Parameters.AddWithValue("document_id", documentId);
+            attachmentCommand.Parameters.AddWithValue("user_id", effectiveUserId);
+            await using var attachmentReader = await attachmentCommand.ExecuteReaderAsync(cancellationToken);
+            return await attachmentReader.ReadAsync(cancellationToken)
+                ? ReadSource(attachmentReader, "conversation_owner_only", access.RoleCodes)
+                : null;
+        }
+        catch (PostgresException exception) when (exception.SqlState is "42P01" or "42703")
+        {
+            return null;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Celar AI private source resolution failed. DocumentId={DocumentId} Diagnostic={Diagnostic}",
+                documentId,
+                Diagnostic(exception));
+            return null;
+        }
+    }
+
+    private static PulseAiAuthorizedDocumentSource ReadProjectSource(
+        NpgsqlDataReader reader,
+        string accessScope,
+        IReadOnlySet<string> roleCodes)
+    {
+        var source = ReadSource(reader, accessScope, roleCodes);
+        if (reader.IsDBNull(20)
+            || source.ProjectId is not Guid projectId)
+        {
+            return source;
+        }
+
+        var workRegisterDocumentId = reader.GetGuid(20);
+        var workRegisterStoredPath = reader.GetString(21);
+        var durablePath = ProjectPulseUploadStorage.ResolveExistingStoredFile(
+            workRegisterStoredPath,
+            projectId,
+            workRegisterDocumentId);
+
+        // A linked Module 055C document is governed by the durable Work Register
+        // identity. The bridge row may contain an absolute path from an older API
+        // revision, so use the same relocation logic as the download endpoint.
+        // If the durable file cannot be resolved, preserve the bridge path only
+        // so the existing immutable-snapshot gate can fail closed with its normal
+        // bounded diagnostic rather than bypassing storage validation.
+        return durablePath is null
+            ? source
+            : source with { StoragePath = durablePath };
+    }
+
+    private static PulseAiAuthorizedDocumentSource ReadSource(
+        NpgsqlDataReader reader,
+        string accessScope,
+        IReadOnlySet<string> roleCodes) => new(
+            DocumentId: reader.GetGuid(0),
+            ProjectId: reader.IsDBNull(1) ? null : reader.GetGuid(1),
+            ProjectCode: reader.GetString(2),
+            ProjectName: reader.GetString(3),
+            CustomerName: reader.GetString(4),
+            DocumentType: reader.GetString(5),
+            DocumentCategory: reader.GetString(6),
+            OriginalFileName: reader.GetString(7),
+            StoredFileName: reader.GetString(8),
+            StoragePath: reader.GetString(9),
+            ContentType: reader.IsDBNull(10) ? null : reader.GetString(10),
+            SizeBytes: reader.GetInt64(11),
+            EngineeringVisible: reader.GetBoolean(12),
+            AiTimesheetContextEnabled: reader.GetBoolean(13),
+            ExtractionStatus: reader.GetString(14),
+            ExistingContextSummaryReady: reader.GetBoolean(15),
+            ContextLastProcessedAt: reader.IsDBNull(16) ? null : reader.GetFieldValue<DateTimeOffset>(16),
+            UploadedAt: reader.GetFieldValue<DateTimeOffset>(17),
+            UploadSource: reader.GetString(18),
+            AccessScope: accessScope,
+            Classification: reader.GetString(19),
+            RoleCodes: roleCodes.OrderBy(value => value).ToArray());
+
+    private static async Task<AccessContext> LoadAccessAsync(
+        NpgsqlConnection connection,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT
+                u.user_id,
+                COALESCE(u.is_active, FALSE),
+                COALESCE(string_agg(DISTINCT r.role_code, ',' ORDER BY r.role_code), ''),
+                COALESCE(string_agg(DISTINCT permission.permission_code, ',' ORDER BY permission.permission_code), '')
+            FROM app_users u
+            LEFT JOIN app_user_role_assignments ura
+                ON ura.user_id = u.user_id
+               AND ura.is_active = TRUE
+            LEFT JOIN app_roles r
+                ON r.app_role_id = ura.app_role_id
+               AND r.is_active = TRUE
+            LEFT JOIN app_role_permissions role_permission
+                ON role_permission.app_role_id = r.app_role_id
+            LEFT JOIN app_permissions permission
+                ON permission.app_permission_id = role_permission.app_permission_id
+            WHERE u.user_id = @user_id
+            GROUP BY u.user_id, u.is_active;
+            """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.AddWithValue("user_id", userId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return AccessContext.Empty(userId);
+        var roles = reader.GetString(2)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var permissions = reader.GetString(3)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return new AccessContext(
+            reader.GetGuid(0),
+            reader.GetBoolean(1),
+            roles,
+            permissions);
+    }
+
+    private static IReadOnlyList<string> MissingDatabaseConfiguration()
+    {
+        try { return ProjectPulseAiDatabaseConnection.Resolve() is null ? ["Celar AI database connection"] : []; }
+        catch (InvalidOperationException exception) { return [exception.Message]; }
+    }
+
+    private static string ConnectionString() =>
+        ProjectPulseAiDatabaseConnection.Resolve()
+        ?? throw new InvalidOperationException("Celar AI database configuration is unavailable.");
+
+    private static string Diagnostic(Exception exception) => exception switch
+    {
+        PostgresException postgres => $"postgres_{postgres.SqlState}",
+        NpgsqlException => "database_transport_failure",
+        TimeoutException => "timeout",
+        OperationCanceledException => "cancelled",
+        _ => "private_source_resolution_failure"
+    };
+
+    private sealed record AccessContext(
+        Guid UserId,
+        bool IsActive,
+        IReadOnlySet<string> RoleCodes,
+        IReadOnlySet<string> PermissionCodes)
+    {
+        public bool IsDocumentServicePrincipal =>
+            Guid.TryParse(
+                Environment.GetEnvironmentVariable("PROJECTPULSE_PULSE_AI_DOCUMENT_SERVICE_PRINCIPAL_USER_ID"),
+                out var servicePrincipalUserId)
+            && servicePrincipalUserId != Guid.Empty
+            && UserId == servicePrincipalUserId
+            && PermissionCodes.Contains("QUEUE_PULSE_AI_DOCUMENT_PROCESSING");
+        public bool IsBroadScope => RoleCodes.Overlaps(BroadRoles);
+        public bool IsSuperAdministrator => RoleCodes.Contains("SUPER_ADMINISTRATOR");
+        public bool CanQueue => IsSuperAdministrator || PermissionCodes.Contains("QUEUE_PULSE_AI_DOCUMENT_PROCESSING");
+        public string ScopeLabel => IsBroadScope
+            ? "organization_document_scope"
+            : RoleCodes.Overlaps(new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "PROJECT_MANAGER",
+                "PROJECT_MANAGEMENT",
+                "PROJECT_MANAGEMENT_LEAD",
+                "PROJECT_MANAGEMENT_TEAM_LEAD",
+                "PM_TEAM_LEAD"
+            })
+                ? "managed_and_assigned_project_scope"
+                : "assigned_project_scope";
+        public static AccessContext Empty(Guid userId) =>
+            new(
+                userId,
+                false,
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    }
+}

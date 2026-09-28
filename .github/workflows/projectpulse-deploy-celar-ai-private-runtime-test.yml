@@ -1,0 +1,42 @@
+name: Validate Deferred Celar AI OpenCloud Private Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Enter VALIDATE-OPEN-CLOUD-DEFERRAL (legacy deployment token DEPLOY-CELAR-AI-OPENCLOUD-RUNTIME-TO-TEST remains disabled)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: celar-ai-opencloud-deferral-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate the deferred portable runtime package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Confirm OpenCloud remains deferred and non-mutating
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ '${{ inputs.confirmation }}' == VALIDATE-OPEN-CLOUD-DEFERRAL ]]
+          node tests/validate-celar-ai-opencloud-deferred-runtime.mjs
+          test -f deployment/environments/opencloud-template.yml
+          test -f deployment/podman/compose.yml
+          test -f deployment/podman/private-runtime.env.example
+          grep -Fq 'status: deferred-until-opencloud' deployment/environments/opencloud-template.yml
+          grep -Fq 'topology: shared-private-runtime-vm' deployment/environments/opencloud-template.yml
+          grep -Fq 'enabled: false' deployment/environments/opencloud-template.yml
+          echo 'OPEN_CLOUD_PRIVATE_RUNTIME_DEPLOYMENT=DISABLED'
+          echo 'AZURE_PRIVATE_RUNTIME_MUTATION=NONE'

@@ -1,0 +1,210 @@
+name: Validate Pulse AI System Intelligence and Troubleshooting
+
+on:
+  push:
+    branches:
+      - 'feature/module-011-system-intelligence-troubleshooting-*'
+  pull_request:
+    paths:
+      - '.github/workflows/celar-ai-runtime-rebrand-ci.yml'
+      - '.github/workflows/celar-ai-enterprise-platform-ci.yml'
+      - '.github/workflows/pulse-ai-system-intelligence-ci.yml'
+      - '.github/workflows/pulse-ai-help-chat-usability-ci.yml'
+      - 'database/migrations/054_pulse_ai_system_intelligence_conversations.sql'
+      - 'database/rollback/054_pulse_ai_system_intelligence_conversations_rollback.sql'
+      - 'database/migrations/061_celar_ai_capability_routing.sql'
+      - 'database/rollback/061_celar_ai_capability_routing_rollback.sql'
+      - 'tests/test-pulse-ai-system-intelligence-migration-054.sh'
+      - 'docs/modules/module-011-pulse-ai/**'
+      - 'src/backend/ProjectTime.Api/Ai/**'
+      - 'src/backend/ProjectTime.Api/Modules/PulseAiSystemIntelligenceModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/CelarAiBrandModule.cs'
+      - 'src/backend/ProjectTime.Api/ProjectTime.Api.csproj'
+      - 'src/frontend/project-time-web/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pulse-ai-system-intelligence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify source isolation and protected deployment boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE_BRANCH="${GITHUB_BASE_REF:-main}"
+          HEAD_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          git fetch origin "$BASE_BRANCH" --no-tags
+          BASE_REF="$(git merge-base "origin/$BASE_BRANCH" HEAD)"
+          test -n "$BASE_REF"
+          CHANGED="$(git diff --name-only "$BASE_REF"...HEAD)"
+          printf '%s\n' "$CHANGED"
+
+          if [[ "$HEAD_BRANCH" == feature/module-011-system-intelligence-troubleshooting-* ]]; then
+            test "$BASE_REF" = "$(git rev-parse "origin/$BASE_BRANCH")"
+            ALLOWED='^(\.github/workflows/(pulse-ai-system-intelligence-ci|pulse-ai-help-chat-usability-ci)\.yml|database/migrations/054_pulse_ai_system_intelligence_conversations\.sql|database/rollback/054_pulse_ai_system_intelligence_conversations_rollback\.sql|tests/test-pulse-ai-system[-_]intelligence[-_]migration[-_]054\.sh|docs/modules/module-011-pulse-ai/SYSTEM-INTELLIGENCE-AND-TROUBLESHOOTING\.md|src/backend/ProjectTime\.Api/Ai/(PulseAiSystemIntelligenceContracts|PulseAiSystemKnowledgeCatalog|PulseAiSystemApiCatalogService|PulseAiSystemToolExecutor|PulseAiSystemIntelligenceRepository|PulseAiSystemIntelligenceService|ProjectPulseAiServiceCollectionExtensions)\.cs|src/backend/ProjectTime\.Api/Modules/PulseAiSystemIntelligenceModule\.cs|src/backend/ProjectTime\.Api/ProjectTime\.Api\.csproj|src/frontend/project-time-web/package(-lock)?\.json|src/frontend/project-time-web/container-context/(database/(migrations/054_pulse_ai_system_intelligence_conversations\.sql|rollback/054_pulse_ai_system_intelligence_conversations_rollback\.sql)|docs/modules/module-011-pulse-ai/SYSTEM-INTELLIGENCE-AND-TROUBLESHOOTING\.md|src/backend/ProjectTime\.Api/Modules/PulseAiSystemIntelligenceModule\.cs|tests/test-pulse-ai-system-intelligence-migration-054\.sh)|src/frontend/project-time-web/scripts/(inject-pulse-ai-system-chat-group7-compatibility|validate-module-011-pulse-ai|validate-module-011-system-intelligence|validate-module-011-system-intelligence-package|validate-module-011-private-document-pipeline|validate-module-011-pulse-ai-deep-intelligence|validate-pulse-ai-help-chat-usability)\.mjs|src/frontend/project-time-web/src/(HelpAssistant\.jsx|pulse-ai-system-chat\.css|PulseAiSystemIntelligenceWorkbench\.jsx|pulse-ai-system-intelligence-workbench\.css|WorkTaskBuilderPanel\.jsx))$'
+            UNEXPECTED="$(grep -Ev "$ALLOWED" <<<"$CHANGED" || true)"
+            if [[ -n "$UNEXPECTED" ]]; then
+              echo 'Unexpected Pulse AI system-intelligence source scope:' >&2
+              printf '%s\n' "$UNEXPECTED" >&2
+              exit 1
+            fi
+            RESTRICTED="$(grep -E '^(deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-|src/backend/ProjectTime\.Api/Ai/(ProjectPulseAiConfiguration|ProjectPulseAiRemoteProviders|ProjectPulseAiSecretStore)\.cs|src/backend/ProjectTime\.Api/Modules/AiProviderConfigurationModule\.cs|src/frontend/project-time-web/src/AiProviderConfigurationCenter\.)' <<<"$CHANGED" || true)"
+            if [[ -n "$RESTRICTED" ]]; then
+              echo 'The system-intelligence feature branch overlaps deployment or provider-configuration implementation.' >&2
+              printf '%s\n' "$RESTRICTED" >&2
+              exit 1
+            fi
+            echo 'PULSE_AI_SYSTEM_INTELLIGENCE_VALIDATION_MODE=FEATURE_SOURCE' >> "$GITHUB_ENV"
+          else
+            echo 'PULSE_AI_SYSTEM_INTELLIGENCE_VALIDATION_MODE=REGRESSION' >> "$GITHUB_ENV"
+            echo "PULSE_AI_SYSTEM_INTELLIGENCE_REGRESSION_BRANCH=$HEAD_BRANCH"
+          fi
+
+          for protected in \
+            '.github/workflows/projectpulse-deploy-runtime-direct-timer-recovery-test.yml' \
+            '.github/workflows/validate-runtime-direct-timer-recovery-deployment.yml' \
+            'scripts/validate-runtime-direct-timer-recovery-test-deployment.sh'; do
+            if grep -Fxq "$protected" <<<"$CHANGED"; then
+              echo "Protected deployment file changed: $protected" >&2
+              exit 1
+            fi
+          done
+
+          git diff --check "$BASE_REF"...HEAD
+          echo "PULSE_AI_SYSTEM_INTELLIGENCE_BASE=$BASE_REF"
+          echo 'PULSE_AI_SYSTEM_INTELLIGENCE_SOURCE_ISOLATION=PASSED'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Validate system-intelligence and preserved source contracts
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ./scripts/inject-pulse-ai-system-chat-group7-compatibility.mjs
+          node --check ./scripts/validate-module-011-system-intelligence-package.mjs
+          node ./scripts/validate-module-011-system-intelligence-package.mjs
+          node ./scripts/validate-module-011-pulse-ai.mjs
+          node ./scripts/validate-module-011-pulse-ai-deep-intelligence.mjs
+          node ./scripts/validate-module-011-private-document-pipeline.mjs
+          node ./scripts/validate-module-011-private-runtime-activation.mjs
+          node ./scripts/validate-module-011-private-rag-orchestration.mjs
+          node ./scripts/validate-pulse-ai-help-chat-usability.mjs
+          node ./scripts/validate-celar-ai-runtime-rebrand.mjs
+          npm run validate:group7-ai-help-system-guide
+          npm run validate:group2b-production-resilience
+          npm run validate:module068
+          npm run validate:module076
+          npm run validate:module077
+          npm run validate:module078
+          npm run validate:module998
+          echo 'PULSE_AI_SYSTEM_INTELLIGENCE_SOURCE_CONTRACT=PASSED'
+
+      - name: Test migration 054 apply, rollback, and reapply
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x tests/test-pulse-ai-system-intelligence-migration-054.sh
+          tests/test-pulse-ai-system-intelligence-migration-054.sh
+
+      - name: Build ProjectTime API and verify endpoint registration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release | tee pulse-ai-system-intelligence-api-build.log
+          grep -Fq '0 Error(s)' pulse-ai-system-intelligence-api-build.log
+          GENERATED="$(find src/backend/ProjectTime.Api -maxdepth 8 -name Program.ScopedRbac.g.cs -print -quit)"
+          test -n "$GENERATED"
+          grep -Fq 'app.MapPulseAiSystemIntelligenceEndpoints();' "$GENERATED"
+          echo 'PULSE_AI_SYSTEM_INTELLIGENCE_API_BUILD=PASSED'
+
+      - name: Install frontend dependencies
+        working-directory: src/frontend/project-time-web
+        run: npm ci --no-audit --no-fund
+
+      - name: Build complete frontend production bundle
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run build | tee pulse-ai-system-intelligence-frontend-build.log
+          test -s dist/index.html
+          cat dist/assets/*.js > /tmp/pulse-ai-system-intelligence.js
+          cat dist/assets/*.css > /tmp/pulse-ai-system-intelligence.css
+
+          require_marker() {
+            local file="$1"
+            local marker="$2"
+            local kind="$3"
+            if ! grep -aFq -- "$marker" "$file"; then
+              echo "MISSING_${kind}_MARKER=$marker" >&2
+              exit 1
+            fi
+          }
+
+          require_scroll_contract() {
+            local file="$1"
+            local kind="$2"
+            if ! grep -aEq -- '(overflow-y:[[:space:]]*scroll|overflow:[^;}]*scroll)' "$file"; then
+              echo "MISSING_${kind}_SCROLL_CONTRACT" >&2
+              exit 1
+            fi
+          }
+
+          require_marker /tmp/pulse-ai-system-intelligence.js 'Ask Celar AI' COMPILED_JS
+          require_marker /tmp/pulse-ai-system-intelligence.js 'Celar AI Workbench' COMPILED_JS
+          require_marker /tmp/pulse-ai-system-intelligence.js '/api/celar-ai/v1/chat' COMPILED_JS
+          require_marker /tmp/pulse-ai-system-intelligence.css '.help-panel.pulse-ai-system-chat' COMPILED_CSS
+          require_scroll_contract /tmp/pulse-ai-system-intelligence.css COMPILED_CSS
+          require_marker /tmp/pulse-ai-system-intelligence.css 'scrollbar-gutter:stable' COMPILED_CSS
+          echo 'PULSE_AI_SYSTEM_INTELLIGENCE_FRONTEND_BUILD=PASSED'
+
+      - name: Validate production web container context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker build \
+            --file deployment/containers/web/Dockerfile \
+            --tag "projectpulse-system-intelligence:${GITHUB_SHA}" \
+            .
+          echo 'PULSE_AI_SYSTEM_INTELLIGENCE_WEB_CONTAINER=PASSED'
+
+      - name: Publish validation summary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            echo '## Module 011 — System Intelligence and Troubleshooting'
+            echo
+            echo "- Validation mode: ${PULSE_AI_SYSTEM_INTELLIGENCE_VALIDATION_MODE:-UNKNOWN}"
+            echo '- Durable conversations, API discovery, troubleshooting, future-enhancement guidance, and View-As boundaries: passed'
+            echo '- Approved Celar capability-routing migration compatibility: passed'
+            echo '- Migration 054 lifecycle, .NET API, frontend production bundle, and web container: passed'
+            echo '- Azure, Entra, provider-secret, deployment, and business-record mutation: none'
+          } >> "$GITHUB_STEP_SUMMARY"

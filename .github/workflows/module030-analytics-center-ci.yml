@@ -1,0 +1,158 @@
+name: Validate Module 030 Analytics Center
+
+on:
+  push:
+    branches:
+      - 'feature/module-030-analytics-center-*'
+      - 'feature/analytics-center-enterprise-experience-*'
+      - 'fix/module030-regression-validator-*'
+      - 'fix/module030-enterprise-regression-mode-*'
+  pull_request:
+    paths:
+      - '.github/workflows/module030-analytics-center-ci.yml'
+      - '.github/workflows/module030-analytics-enterprise-experience-ci.yml'
+      - '.github/workflows/group5-financial-operations-recovery-ci.yml'
+      - '.github/workflows/pulse-ai-help-chat-usability-ci.yml'
+      - 'tests/test-uat-functional-completion-contract.sh'
+      - 'database/migrations/055_analytics_center.sql'
+      - 'database/migrations/060_analytics_center_enterprise_experience.sql'
+      - 'database/rollback/055_analytics_center_rollback.sql'
+      - 'database/rollback/060_analytics_center_enterprise_experience_rollback.sql'
+      - 'docs/modules/module-030-analytics-center/README.md'
+      - 'docs/modules/module-030-analytics-enterprise-experience/README.md'
+      - 'scripts/ci/validate-module030-source-boundary.sh'
+      - 'scripts/ci/validate-module030-compiled.sh'
+      - 'src/backend/ProjectTime.Api/Directory.Build.targets'
+      - 'src/backend/ProjectTime.Api/Modules/AnalyticsCenter*.cs'
+      - 'src/backend/ProjectTime.Api/Modules/AnalyticsBrandedExportBuilder.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module065AnalyticsAttachmentDelivery.cs'
+      - 'src/backend/ProjectTime.Api/Modules/EnterpriseReporting*.cs'
+      - 'src/backend/ProjectTime.Api/ProjectTime.Api.csproj'
+      - 'src/frontend/project-time-web/package.json'
+      - 'src/frontend/project-time-web/scripts/inject-analytics-center.mjs'
+      - 'src/frontend/project-time-web/scripts/inject-group-4-project-notification-automation.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-analytics-center.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-group-5-financial-operations-recovery.mjs'
+      - 'src/frontend/project-time-web/src/AnalyticsCenter.jsx'
+      - 'src/frontend/project-time-web/src/analytics/AnalyticsMultiSelect.jsx'
+      - 'src/frontend/project-time-web/src/analytics-center.css'
+      - 'tests/test-analytics-center-migration-055.sh'
+      - 'tests/test-analytics-center-enterprise-migration-060.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: module030-analytics-center-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify Module 030 ownership or run regression mode
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq 'ANALYTICS_CENTER_UAT_OWNED_SUBSET=PASSED' scripts/ci/validate-module030-source-boundary.sh
+          bash scripts/ci/validate-module030-source-boundary.sh
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Check Analytics Center JavaScript syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check src/frontend/project-time-web/scripts/inject-analytics-center.mjs
+          node --check src/frontend/project-time-web/scripts/inject-group-4-project-notification-automation.mjs
+          node --check src/frontend/project-time-web/scripts/validate-analytics-center.mjs
+          node --check src/frontend/project-time-web/scripts/validate-group-5-financial-operations-recovery.mjs
+
+      - name: Test migration 055 apply idempotence immutability rollback and reapply
+        shell: bash
+        run: bash tests/test-analytics-center-migration-055.sh
+
+      - name: Test migration 060 when the enterprise package is present
+        if: ${{ hashFiles('database/migrations/060_analytics_center_enterprise_experience.sql') != '' }}
+        shell: bash
+        run: bash tests/test-analytics-center-enterprise-migration-060.sh
+
+      - name: Validate Analytics Center source contract
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: node ./scripts/validate-analytics-center.mjs
+
+      - name: Build ProjectTime API in Release mode
+        shell: bash
+        run: dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release
+
+      - name: Install frontend dependencies
+        working-directory: src/frontend/project-time-web
+        run: npm ci --no-audit --no-fund
+
+      - name: Validate Analytics Center dependencies
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run validate:group3-project-financial-workspaces
+          npm run validate:group5-financial-operations
+          npm run validate:group6-enterprise-presentation
+          npm run validate:group7-ai-help-system-guide
+          npm run validate:work-register-055c-055d
+          npm run validate:module005
+          npm run validate:module069
+          npm run validate:module071
+          npm run validate:module072
+          npm run validate:module075
+          npm run validate:module076
+          npm run validate:module077
+          npm run validate:module078
+          npm run validate:module079
+          npm run validate:module080
+          npm run validate:analytics-center
+
+      - name: Build complete frontend production bundle
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: npm run build
+
+      - name: Validate compiled Analytics Center markers
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: bash ../../../scripts/ci/validate-module030-compiled.sh
+
+      - name: Publish validation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Module 030 Analytics Center validation'
+            echo
+            echo "- Validation mode: ${ANALYTICS_CENTER_VALIDATION_MODE:-UNKNOWN}"
+            echo '- Active compiled profile: base or enterprise, selected from checked-out source'
+            echo '- Consolidated releases may change only the static web-container Dockerfile; deployment controls remain prohibited.'
+            echo '- Migration 055 regression: executed'
+            echo '- Migration 060 regression: executed when present'
+            echo '- API and complete frontend builds: executed'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,218 @@
+name: Verify installed FlowHive PSA in Protected Test
+
+run-name: Installed FlowHive Test verification ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_run_id:
+        description: Canonical Protected Test installation to verify; acceptance may have failed
+        required: true
+        type: string
+      acceptance_scope:
+        description: Installed acceptance slice; full includes FlowHive, sow_role verifies SOW Generator and My Role only
+        required: true
+        type: choice
+        options:
+          - full
+          - sow_role
+        default: full
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: projectpulse-deploy-test
+  cancel-in-progress: false
+
+jobs:
+  verify-installed-release:
+    name: Verify installed FlowHive release without deployment
+    runs-on: ubuntu-24.04
+    # Two existing 40-minute application ceilings, observation grace, setup and evidence.
+    timeout-minutes: 95
+    # The object form resolves to the existing protected Test environment;
+    # it is not a separate environment or a deployment lane.
+    environment:
+      name: test
+    env:
+      BASE: https://phd-west-test.onenecklab.com
+      DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+      ACCEPTANCE_SCOPE: ${{ inputs.acceptance_scope }}
+      INSTALLED_RELEASE_CONTEXT: ${{ github.workspace }}/flowhive-installed-acceptance/installed-release-context.json
+      PREVIOUS_PLANNER_RUN_ID: 171e4430-95e4-4f80-be14-454dcc319ef2
+      EVIDENCE_DIR: ${{ github.workspace }}/flowhive-installed-acceptance
+
+    steps:
+      - name: Check out the exact trusted main controller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard trusted main and installed acceptance scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'Installed acceptance is main-only.' >&2; exit 1; }
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$GITHUB_SHA" ]] || { echo 'The installed verifier is not running the current trusted main.' >&2; exit 1; }
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'A selected deployment run ID is required.' >&2; exit 1; }
+          case "$ACCEPTANCE_SCOPE" in
+            full|sow_role) ;;
+            *) echo 'Unsupported installed-acceptance scope.' >&2; exit 1 ;;
+          esac
+          [[ "$BASE" == https://phd-west-test.onenecklab.com ]]
+          mkdir -p "$EVIDENCE_DIR"
+
+      - name: Resolve selected server-confirmed deployment identity
+        id: deployment_identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTPUT_CONTEXT: ${{ github.workspace }}/flowhive-installed-acceptance/installed-release-context.json
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/release-test/resolve-flowhive-installed-deployment.py
+          context="$EVIDENCE_DIR/installed-release-context.json"
+          echo "TARGET_RELEASE_COMMIT=$(jq -r '.applicationSha' "$context")" >> "$GITHUB_ENV"
+          echo "TARGET_RELEASE_BRANCH=$(jq -r '.applicationBranch' "$context")" >> "$GITHUB_ENV"
+          echo "INSTALLATION_RUN_ID=$(jq -r '.deploymentRunId' "$context")" >> "$GITHUB_ENV"
+          echo "INSTALLATION_CONTROLLER_SHA=$(jq -r '.controllerSha' "$context")" >> "$GITHUB_ENV"
+
+      - name: Install isolated browser acceptance dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m venv "$RUNNER_TEMP/flowhive-psa-browser"
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/pip" install --disable-pip-version-check playwright==1.57.0
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" -m playwright install --with-deps chromium
+
+      - name: Reconcile prior planner operation before any generation
+        id: planner
+        if: ${{ !cancelled() && inputs.acceptance_scope == 'full' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          PROJECTPULSE_M025_PM_EMAIL: ${{ secrets.PROJECTPULSE_M025_PM_EMAIL }}
+          PROJECTPULSE_M025_PM_PASSWORD: ${{ secrets.PROJECTPULSE_M025_PM_PASSWORD }}
+          FLOWHIVE_APPROVED_PROJECT_ID: 0ea25cb8-1a7f-4baf-ba7b-2dd76215be49
+        run: |
+          set -Eeuo pipefail
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/reconcile-flowhive-planner.py
+
+      - name: Verify installed API identity before business writes
+        id: identity
+        shell: bash
+        env:
+          PROJECTPULSE_TEST_UAT_SESSION: ${{ secrets.PROJECTPULSE_TEST_UAT_SESSION }}
+          PROJECTPULSE_TEST_UAT_ADMIN_EMAIL: ${{ secrets.PROJECTPULSE_TEST_UAT_ADMIN_EMAIL }}
+          PROJECTPULSE_TEST_UAT_ADMIN_PASSWORD: ${{ secrets.PROJECTPULSE_TEST_UAT_ADMIN_PASSWORD }}
+          INSTALLED_RELEASE_CONTEXT: ${{ github.workspace }}/flowhive-installed-acceptance/installed-release-context.json
+        run: |
+          set -Eeuo pipefail
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/verify-flowhive-installed-identity.py
+
+      - name: Reconcile prior planner run and verify real FlowHive lifecycle
+        id: flowhive
+        if: ${{ !cancelled() && inputs.acceptance_scope == 'full' && steps.identity.outcome == 'success' && steps.planner.outcome == 'success' }}
+        shell: bash
+        env:
+          FLOWHIVE_INSTALLED_VERIFICATION_AUTHORIZED: 'true'
+          PROJECTPULSE_M025_PM_EMAIL: ${{ secrets.PROJECTPULSE_M025_PM_EMAIL }}
+          PROJECTPULSE_M025_PM_PASSWORD: ${{ secrets.PROJECTPULSE_M025_PM_PASSWORD }}
+          FLOWHIVE_APPROVED_PROJECT_ID: 0ea25cb8-1a7f-4baf-ba7b-2dd76215be49
+          PSA_VERIFICATION_APPROVAL_FILE: ${{ github.workspace }}/flowhive-installed-acceptance/installed-approval.json
+        run: |
+          set -Eeuo pipefail
+          jq -n \
+            --slurpfile installed "$EVIDENCE_DIR/installed-release-context.json" \
+            --arg projectId '0ea25cb8-1a7f-4baf-ba7b-2dd76215be49' \
+            --arg pm "$PROJECTPULSE_M025_PM_EMAIL" \
+            '{contract:"flowhive-installed-test-verification-v2",repository:"ahmedadeyemi-cts/project-time-platform",pullRequest:$installed[0].applicationPullRequest,branch:$installed[0].applicationBranch,sha:$installed[0].applicationSha,deploymentRunId:$installed[0].deploymentRunId,environment:"test",publicOrigin:"https://phd-west-test.onenecklab.com",projectId:$projectId,projectManagerLogin:$pm,allowCustomerPublication:false,allowCanonicalTaskAdoption:false}' \
+            > "$PSA_VERIFICATION_APPROVAL_FILE"
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-flowhive-psa-live-uat.py
+
+      - name: Run normal authorized Solution Architect SOW lifecycle
+        id: sow
+        if: ${{ !cancelled() && (inputs.acceptance_scope == 'full' || inputs.acceptance_scope == 'sow_role') && steps.identity.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          PROJECTPULSE_M025_SA_EMAIL: ${{ secrets.PROJECTPULSE_M025_SA_EMAIL }}
+          PROJECTPULSE_M025_SA_PASSWORD: ${{ secrets.PROJECTPULSE_M025_SA_PASSWORD }}
+          MODULE025_GENERATION_TIMEOUT_SECONDS: '2430'
+        run: |
+          set -Eeuo pipefail
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-module025-installed-sa-uat.py
+
+      - name: Verify My Role in Pulse, handoffs, reload, and access boundaries
+        id: my_role
+        if: ${{ !cancelled() && (inputs.acceptance_scope == 'full' || inputs.acceptance_scope == 'sow_role') && steps.identity.outcome == 'success' }}
+        shell: bash
+        env:
+          PROJECTPULSE_M025_PM_EMAIL: ${{ secrets.PROJECTPULSE_M025_PM_EMAIL }}
+          PROJECTPULSE_M025_PM_PASSWORD: ${{ secrets.PROJECTPULSE_M025_PM_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-flowhive-my-role-browser.py
+
+      - name: Report Module 025 SOW/GSD authorization prerequisite without enabling it
+        id: module025
+        if: ${{ !cancelled() && (inputs.acceptance_scope == 'full' || inputs.acceptance_scope == 'sow_role') && steps.identity.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          TEST_LOGIN_PASSWORD: ${{ secrets.PROJECTPULSE_M087_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/check-module025-installed-prerequisite.py
+
+      - name: Publish sanitized installed-acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: flowhive-installed-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/flowhive-installed-acceptance
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Require complete installed acceptance
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case "$ACCEPTANCE_SCOPE" in
+            full|sow_role) ;;
+            *) echo 'Installed acceptance scope was not validated.' >&2; exit 1 ;;
+          esac
+          [[ "${{ steps.identity.outcome }}" == success ]] || { echo 'Installed identity gate did not pass.' >&2; exit 1; }
+          if [[ "$ACCEPTANCE_SCOPE" == full ]]; then
+            [[ "${{ steps.planner.outcome }}" == success ]] || { echo 'Prior planner operation was not reconciled.' >&2; exit 1; }
+            [[ "${{ steps.flowhive.outcome }}" == success ]] || { echo 'FlowHive lifecycle did not pass.' >&2; exit 1; }
+          else
+            echo 'FLOWHIVE_ACCEPTANCE_SCOPE=sow_role'
+            echo 'FlowHive generation and lifecycle checks were intentionally not invoked.'
+          fi
+          [[ "${{ steps.sow.outcome }}" == success ]] || { echo 'Normal authorized Solution Architect SOW lifecycle did not pass.' >&2; exit 1; }
+          [[ "${{ steps.my_role.outcome }}" == success ]] || { echo 'My Role in Pulse browser acceptance did not pass.' >&2; exit 1; }
+          [[ -f "$EVIDENCE_DIR/module025-installed-prerequisite.json" ]] || { echo 'Module 025 prerequisite evidence is missing.' >&2; exit 1; }
+          [[ -f "$EVIDENCE_DIR/module025-installed-sa-uat.json" ]] || { echo 'Normal Solution Architect SOW evidence is missing.' >&2; exit 1; }
+          jq -e '
+            .status == "passed" and
+            .normalAuthorizedSolutionArchitect == true and
+            .fixtureMutation == false and
+            .mockedResponses == false and
+            .generationPosts == 1 and
+            .reviewedSaveReadback == true and
+            .retainedVersions.confirmed == true and
+            .retainedVersions.sowAndGsdDownloaded == true and
+            .retainedVersions.reopened == true and
+            .retainedVersions.archived == true
+          ' "$EVIDENCE_DIR/module025-installed-sa-uat.json" >/dev/null || {
+            echo 'Normal Solution Architect SOW lifecycle evidence did not pass its bounded acceptance contract.' >&2
+            exit 1
+          }
+          echo 'The exceptional Module 025 fixture prerequisite remains informational; normal authorized SA evidence is the acceptance gate.'

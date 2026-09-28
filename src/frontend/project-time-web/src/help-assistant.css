@@ -1,0 +1,50 @@
+/* Global Help and Celar AI launcher visibility and interaction safeguards. */
+.help-assistant,
+.help-assistant-widget,
+.help-assistant-launcher,
+.help-chat,
+.help-chat-button,
+.help-button,
+.assistant-help,
+.project-pulse-help-assistant,
+.help-launcher,
+.help-panel {
+  z-index: 2147483000 !important;
+}
+
+.help-assistant,
+.help-assistant-widget,
+.project-pulse-help-assistant {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+}
+
+.help-assistant button,
+.help-assistant-widget button,
+.help-chat-button,
+.help-button,
+.assistant-help button,
+.project-pulse-help-assistant button,
+.help-launcher,
+.help-panel button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.help-panel button.help-full-guide-button,
+.help-panel button.help-pulse-ai-button,
+.help-panel button.help-report-defect-button,
+.help-panel .help-answer-navigation button,
+.help-panel .help-suggestions button {
+  min-height: 34px;
+}
+
+@media (max-width: 620px) {
+  .help-assistant,
+  .help-assistant-widget,
+  .project-pulse-help-assistant {
+    right: 16px !important;
+    bottom: 16px !important;
+  }
+}

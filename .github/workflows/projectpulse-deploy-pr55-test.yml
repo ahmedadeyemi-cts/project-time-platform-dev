@@ -1,0 +1,519 @@
+name: ProjectPulse Deploy PR55 Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Exact verified Work Register rollout commit
+        required: true
+        default: 4cddc469f7bd20e4cb0e028e9ff1d47842ef7532
+        type: string
+      confirmation:
+        description: Enter DEPLOY-PR55-TO-TEST
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: projectpulse-deploy-test
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Guarded PR55 test deployment
+    environment: test
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_RELEASE_COMMIT: 4cddc469f7bd20e4cb0e028e9ff1d47842ef7532
+    steps:
+      - name: Check out deployment controls
+        uses: actions/checkout@v5
+        with:
+          path: control
+          fetch-depth: 0
+
+      - name: Check out exact release source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_commit }}
+          path: release
+          fetch-depth: 1
+
+      - name: Guard workflow source and release commit
+        id: release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ '${{ github.ref }}' == 'refs/heads/main' ]] || {
+            echo 'This deployment workflow must be dispatched from main.' >&2
+            exit 1
+          }
+          [[ '${{ inputs.confirmation }}' == 'DEPLOY-PR55-TO-TEST' ]] || {
+            echo 'The deployment confirmation text does not match.' >&2
+            exit 1
+          }
+          [[ '${{ inputs.release_commit }}' =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'release_commit must be a complete 40-character SHA.' >&2
+            exit 1
+          }
+
+          CONTROL_COMMIT="$(git -C control rev-parse HEAD)"
+          TARGET_COMMIT="$(git -C release rev-parse HEAD)"
+          [[ "$CONTROL_COMMIT" == '${{ github.sha }}' ]] || {
+            echo 'The checked-out deployment control does not match this workflow run.' >&2
+            exit 1
+          }
+          [[ "$TARGET_COMMIT" == '${{ inputs.release_commit }}' ]] || {
+            echo 'The checked-out release does not match the requested commit.' >&2
+            exit 1
+          }
+          [[ "$TARGET_COMMIT" == "$EXPECTED_RELEASE_COMMIT" ]] || {
+            echo "Only the verified Work Register rollout commit may be deployed by this workflow." >&2
+            exit 1
+          }
+          git -C control merge-base --is-ancestor "$TARGET_COMMIT" HEAD || {
+            echo 'The target release is not an ancestor of the deployment-control commit.' >&2
+            exit 1
+          }
+          echo "target_commit=$TARGET_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "TARGET_RELEASE_VERIFIED=$TARGET_COMMIT"
+
+      - name: Validate deployment controls
+        shell: bash
+        run: control/scripts/validate-pr55-test-deployment.sh
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Load test database connection from Azure
+        shell: bash
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+        run: bash control/scripts/export-pr55-test-database-url.sh
+
+      - name: Capture current release
+        id: before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RAW_OLD_API_IMAGE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+          RAW_OLD_WEB_IMAGE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+          API_REVISION_MODE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query 'properties.configuration.activeRevisionsMode' -o tsv)"
+          WEB_REVISION_MODE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query 'properties.configuration.activeRevisionsMode' -o tsv)"
+          [[ -n "$RAW_OLD_API_IMAGE" && -n "$RAW_OLD_WEB_IMAGE" ]] || {
+            echo 'Could not capture both active image references. Deployment stopped.' >&2
+            exit 1
+          }
+          [[ "${API_REVISION_MODE,,}" == 'single' && "${WEB_REVISION_MODE,,}" == 'single' ]] || {
+            echo 'Both Container Apps must use single-revision mode before this deployment.' >&2
+            exit 1
+          }
+
+          resolve_acr_image_digest() {
+            local image="$1"
+            local registry='${{ vars.AZURE_ACR_NAME }}.azurecr.io/'
+            local relative repository digest
+
+            case "$image" in
+              "$registry"*@sha256:*) printf '%s\n' "$image"; return 0 ;;
+              "$registry"*:*) ;;
+              *)
+                echo "Rollback image is not a tagged or digest-pinned image in the approved ACR: $image" >&2
+                return 1
+                ;;
+            esac
+
+            relative="${image#"$registry"}"
+            repository="${relative%:*}"
+            digest="$(az acr repository show \
+              --name '${{ vars.AZURE_ACR_NAME }}' \
+              --image "$relative" \
+              --query digest \
+              -o tsv)"
+            [[ "$digest" == sha256:* ]] || {
+              echo "Could not resolve the rollback digest for $image." >&2
+              return 1
+            }
+            printf '%s%s@%s\n' "$registry" "$repository" "$digest"
+          }
+
+          OLD_API_IMAGE="$(resolve_acr_image_digest "$RAW_OLD_API_IMAGE")"
+          OLD_WEB_IMAGE="$(resolve_acr_image_digest "$RAW_OLD_WEB_IMAGE")"
+          echo "old_api_image=$OLD_API_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "old_web_image=$OLD_WEB_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "CURRENT_API_IMAGE_IMMUTABLE=$OLD_API_IMAGE"
+          echo "CURRENT_WEB_IMAGE_IMMUTABLE=$OLD_WEB_IMAGE"
+          echo "API_REVISION_MODE=$API_REVISION_MODE"
+          echo "WEB_REVISION_MODE=$WEB_REVISION_MODE"
+
+      - name: Build exact API and web images
+        id: build
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          TARGET_COMMIT='${{ steps.release.outputs.target_commit }}'
+          API_REPOSITORY='project-health-dashboard-api'
+          WEB_REPOSITORY='project-health-dashboard-web'
+          RELEASE_TAG="pr55-$TARGET_COMMIT"
+
+          test -f deployment/containers/api/Dockerfile
+          test -f deployment/containers/web/Dockerfile
+
+          API_DIGEST="$(
+            ../control/scripts/build-pr55-acr-image.sh \
+              '${{ vars.AZURE_ACR_NAME }}' \
+              "$API_REPOSITORY:$RELEASE_TAG" \
+              deployment/containers/api/Dockerfile \
+              .
+          )"
+          WEB_DIGEST="$(
+            ../control/scripts/build-pr55-acr-image.sh \
+              '${{ vars.AZURE_ACR_NAME }}' \
+              "$WEB_REPOSITORY:$RELEASE_TAG" \
+              deployment/containers/web/Dockerfile \
+              .
+          )"
+
+          API_IMAGE='${{ vars.AZURE_ACR_NAME }}.azurecr.io/'"$API_REPOSITORY@$API_DIGEST"
+          WEB_IMAGE='${{ vars.AZURE_ACR_NAME }}.azurecr.io/'"$WEB_REPOSITORY@$WEB_DIGEST"
+          echo "api_image=$API_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "web_image=$WEB_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "IMMUTABLE_API_IMAGE=$API_IMAGE"
+          echo "IMMUTABLE_WEB_IMAGE=$WEB_IMAGE"
+
+      - name: Build checksum-pinned migration image
+        id: migration_image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          TARGET_COMMIT='${{ steps.release.outputs.target_commit }}'
+          MIGRATION_REPOSITORY='project-health-dashboard-pr55-migrator'
+          MIGRATION_TAG="pr55-${TARGET_COMMIT}-${GITHUB_SHA:0:12}"
+          CONTEXT="$RUNNER_TEMP/pr55-migrator-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          install -d -m 0700 "$CONTEXT/migrations"
+          install -m 0644 \
+            control/deployment/containers/pr55-migrator/Dockerfile \
+            "$CONTEXT/Dockerfile"
+          install -m 0755 \
+            control/scripts/apply-pr55-test-migrations.sh \
+            "$CONTEXT/apply-pr55-test-migrations.sh"
+          install -m 0644 \
+            release/database/migrations/034_module_026_crm_erp_integrations.sql \
+            "$CONTEXT/migrations/034_module_026_crm_erp_integrations.sql"
+          install -m 0644 \
+            release/database/migrations/035_work_register_055c_055d_split.sql \
+            "$CONTEXT/migrations/035_work_register_055c_055d_split.sql"
+          install -m 0644 \
+            release/database/migrations/036_work_register_role_scope_and_closeout_handoff.sql \
+            "$CONTEXT/migrations/036_work_register_role_scope_and_closeout_handoff.sql"
+          install -m 0644 \
+            release/database/migrations/037_work_register_dates_and_contract_types.sql \
+            "$CONTEXT/migrations/037_work_register_dates_and_contract_types.sql"
+          install -m 0644 \
+            release/database/migrations/038_work_to_cash_lifecycle_and_audit.sql \
+            "$CONTEXT/migrations/038_work_to_cash_lifecycle_and_audit.sql"
+          install -m 0644 \
+            release/database/migrations/039_work_to_cash_reactivation_lock_order.sql \
+            "$CONTEXT/migrations/039_work_to_cash_reactivation_lock_order.sql"
+          printf '%s\n' "$TARGET_COMMIT" > "$CONTEXT/release-commit"
+
+          mapfile -t CONTEXT_FILES < <(
+            find "$CONTEXT" -type f -printf '%P\n' | LC_ALL=C sort
+          )
+          EXPECTED_FILES=(
+            Dockerfile
+            apply-pr55-test-migrations.sh
+            migrations/034_module_026_crm_erp_integrations.sql
+            migrations/035_work_register_055c_055d_split.sql
+            migrations/036_work_register_role_scope_and_closeout_handoff.sql
+            migrations/037_work_register_dates_and_contract_types.sql
+            migrations/038_work_to_cash_lifecycle_and_audit.sql
+            migrations/039_work_to_cash_reactivation_lock_order.sql
+            release-commit
+          )
+          [[ "${CONTEXT_FILES[*]}" == "${EXPECTED_FILES[*]}" ]] || {
+            echo 'The migration image context contains unexpected or missing files.' >&2
+            printf 'Actual: %s\n' "${CONTEXT_FILES[*]}" >&2
+            exit 1
+          }
+
+          MIGRATION_DIGEST="$(
+            control/scripts/build-pr55-acr-image.sh \
+              '${{ vars.AZURE_ACR_NAME }}' \
+              "$MIGRATION_REPOSITORY:$MIGRATION_TAG" \
+              "$CONTEXT/Dockerfile" \
+              "$CONTEXT"
+          )"
+
+          MIGRATION_IMAGE='${{ vars.AZURE_ACR_NAME }}.azurecr.io/'"$MIGRATION_REPOSITORY@$MIGRATION_DIGEST"
+          echo "image=$MIGRATION_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "IMMUTABLE_MIGRATION_IMAGE=$MIGRATION_IMAGE"
+
+      - name: Apply and verify migrations 034 through 039 inside the private network
+        id: migrations
+        shell: bash
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+          PR55_MIGRATION_IMAGE: ${{ steps.migration_image.outputs.image }}
+          PR55_MIGRATION_JOB_NAME: pr55-mig-${{ github.run_id }}-${{ github.run_attempt }}
+        run: control/scripts/run-pr55-test-migration-job.sh
+
+      - name: Remove temporary PR55 migration job
+        if: ${{ always() }}
+        shell: bash
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          PR55_MIGRATION_JOB_NAME: pr55-mig-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+          EXISTING_JOB="$(az containerapp job list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "[?name=='$PR55_MIGRATION_JOB_NAME'].name | [0]" \
+            --output tsv \
+            --only-show-errors)"
+          if [[ "$EXISTING_JOB" == "$PR55_MIGRATION_JOB_NAME" ]]; then
+            az containerapp job delete \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$PR55_MIGRATION_JOB_NAME" \
+              --yes \
+              --output none \
+              --only-show-errors
+          fi
+          REMAINING_JOB="$(az containerapp job list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "[?name=='$PR55_MIGRATION_JOB_NAME'].name | [0]" \
+            --output tsv \
+            --only-show-errors)"
+          [[ -z "$REMAINING_JOB" ]] || {
+            echo 'The temporary migration job or its secret still exists. Deployment stopped.' >&2
+            exit 1
+          }
+          echo 'PR55_MIGRATION_JOB_POST_STEP_CLEANUP=COMPLETE'
+
+      - name: Deploy API
+        id: deploy_api
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          az containerapp update \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_API_APP }}' \
+            --image '${{ steps.build.outputs.api_image }}' \
+            --set-env-vars \
+              PROJECTPULSE_ENVIRONMENT=test \
+              PROJECTPULSE_SOURCE_COMMIT='${{ steps.release.outputs.target_commit }}' \
+            --revision-suffix "pr55api-${GITHUB_RUN_ID}" \
+            --output none
+
+      - name: Validate API and protected routes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE_URL='${{ vars.PUBLIC_URL }}'
+          BASE_URL="${BASE_URL%/}"
+
+          wait_for_status() {
+            local url="$1"
+            local expected="$2"
+            local status
+            for attempt in $(seq 1 30); do
+              status="$(curl --silent --show-error --output /tmp/pr55-response --write-out '%{http_code}' "$url" || true)"
+              if [[ ",$expected," == *",$status,"* ]]; then
+                echo "ROUTE_OK=$url HTTP=$status"
+                return 0
+              fi
+              sleep 10
+            done
+            echo "Route validation failed: $url returned $status; expected one of $expected." >&2
+            sed -n '1,40p' /tmp/pr55-response >&2 || true
+            return 1
+          }
+
+          wait_for_status "$BASE_URL/health" '200'
+          wait_for_status "$BASE_URL/api/version" '200'
+          wait_for_status "$BASE_URL/api/integrations/026/providers" '401,403'
+          wait_for_status "$BASE_URL/api/work-register/overview" '401,403'
+
+      - name: Deploy web
+        id: deploy_web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          az containerapp update \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_WEB_APP }}' \
+            --image '${{ steps.build.outputs.web_image }}' \
+            --revision-suffix "pr55web-${GITHUB_RUN_ID}" \
+            --output none
+
+      - name: Validate deployed web and release identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE_URL='${{ vars.PUBLIC_URL }}'
+          BASE_URL="${BASE_URL%/}"
+          EXPECTED_LABELS=(
+            'Manage Existing Projects'
+            'Create New Project'
+            'MODULE 055C'
+            'MODULE 055D'
+            'MODULE 999'
+          )
+          WEB_CONTENT_READY='false'
+          LAST_STATUS='not-requested'
+          LAST_ASSET='not-resolved'
+          LAST_MISSING_LABELS="${EXPECTED_LABELS[*]}"
+
+          for attempt in $(seq 1 30); do
+            CACHE_BUSTER="pr55-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}"
+            INDEX_URL="$BASE_URL/?release_check=$CACHE_BUSTER"
+            STATUS="$(
+              curl \
+                --silent \
+                --show-error \
+                --location \
+                --header 'Cache-Control: no-cache' \
+                --header 'Pragma: no-cache' \
+                --output /tmp/pr55-index.html \
+                --write-out '%{http_code}' \
+                "$INDEX_URL" || true
+            )"
+            LAST_STATUS="$STATUS"
+            LAST_ASSET='not-resolved'
+            MISSING_LABELS=("${EXPECTED_LABELS[@]}")
+
+            if [[ "$STATUS" == '200' ]]; then
+              ASSET_PATH="$(sed -nE 's/.*src="([^"]+\.js)".*/\1/p' /tmp/pr55-index.html | head -1)"
+              if [[ -n "$ASSET_PATH" ]]; then
+                case "$ASSET_PATH" in
+                  http://*|https://*) ASSET_URL="$ASSET_PATH" ;;
+                  /*) ASSET_URL="$BASE_URL$ASSET_PATH" ;;
+                  *) ASSET_URL="$BASE_URL/$ASSET_PATH" ;;
+                esac
+                ASSET_URL_WITH_BUSTER="$ASSET_URL?release_check=$CACHE_BUSTER"
+                ASSET_STATUS="$(
+                  curl \
+                    --silent \
+                    --show-error \
+                    --location \
+                    --header 'Cache-Control: no-cache' \
+                    --header 'Pragma: no-cache' \
+                    --output /tmp/pr55-app.js \
+                    --write-out '%{http_code}' \
+                    "$ASSET_URL_WITH_BUSTER" || true
+                )"
+                LAST_STATUS="html=$STATUS,asset=$ASSET_STATUS"
+                LAST_ASSET="$ASSET_PATH"
+                MISSING_LABELS=()
+                if [[ "$ASSET_STATUS" == '200' ]]; then
+                  for label in "${EXPECTED_LABELS[@]}"; do
+                    grep -Fq "$label" /tmp/pr55-app.js || MISSING_LABELS+=("$label")
+                  done
+                else
+                  MISSING_LABELS=("${EXPECTED_LABELS[@]}")
+                fi
+              fi
+            fi
+
+            if (( ${#MISSING_LABELS[@]} == 0 )); then
+              WEB_CONTENT_READY='true'
+              echo "WEB_READINESS_ATTEMPT=$attempt HTTP=$LAST_STATUS ASSET=$LAST_ASSET MISSING_LABELS=NONE"
+              break
+            fi
+
+            LAST_MISSING_LABELS="$(IFS='|'; echo "${MISSING_LABELS[*]}")"
+            echo "WEB_READINESS_ATTEMPT=$attempt HTTP=$LAST_STATUS ASSET=$LAST_ASSET MISSING_LABELS=$LAST_MISSING_LABELS" >&2
+            (( attempt < 30 )) && sleep 10
+          done
+
+          [[ "$WEB_CONTENT_READY" == 'true' ]] || {
+            echo "Web release content did not become ready after 30 attempts: HTTP=$LAST_STATUS ASSET=$LAST_ASSET MISSING_LABELS=$LAST_MISSING_LABELS" >&2
+            exit 1
+          }
+
+          ACTIVE_API_IMAGE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+          ACTIVE_WEB_IMAGE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+          [[ "$ACTIVE_API_IMAGE" == '${{ steps.build.outputs.api_image }}' ]] || {
+            echo "Active API image does not match the expected release image: expected=${{ steps.build.outputs.api_image }} actual=$ACTIVE_API_IMAGE" >&2
+            exit 1
+          }
+          [[ "$ACTIVE_WEB_IMAGE" == '${{ steps.build.outputs.web_image }}' ]] || {
+            echo "Active web image does not match the expected release image: expected=${{ steps.build.outputs.web_image }} actual=$ACTIVE_WEB_IMAGE" >&2
+            exit 1
+          }
+
+          echo "DEPLOYED_RELEASE_COMMIT=${{ steps.release.outputs.target_commit }}"
+          echo "DEPLOYED_API_IMAGE=$ACTIVE_API_IMAGE"
+          echo "DEPLOYED_WEB_IMAGE=$ACTIVE_WEB_IMAGE"
+          echo 'MODULE_055C_LABEL=VERIFIED'
+          echo 'MODULE_055D_LABEL=VERIFIED'
+          echo 'MODULE_999_LABEL=VERIFIED'
+
+      - name: Write deployment evidence
+        if: success()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence
+          cat > evidence/pr55-test-deployment.json <<JSON
+          {
+            "environment": "test",
+            "releaseCommit": "${{ steps.release.outputs.target_commit }}",
+            "workflowCommit": "${{ github.sha }}",
+            "runId": "${{ github.run_id }}",
+            "migration034": "applied-and-verified",
+            "migration035": "applied-and-verified",
+            "migration036": "applied-and-verified",
+            "migration037": "applied-and-verified",
+            "migration038": "applied-and-verified",
+            "migration039": "applied-and-verified",
+            "migrationImage": "${{ steps.migration_image.outputs.image }}",
+            "apiImage": "${{ steps.build.outputs.api_image }}",
+            "webImage": "${{ steps.build.outputs.web_image }}",
+            "previousApiImage": "${{ steps.before.outputs.old_api_image }}",
+            "previousWebImage": "${{ steps.before.outputs.old_web_image }}",
+            "smokeTests": "passed"
+          }
+          JSON
+
+      - name: Upload deployment evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr55-test-deployment-${{ github.run_id }}
+          path: evidence/pr55-test-deployment.json
+          retention-days: 30
+
+      - name: Roll back application images on failure
+        if: ${{ failure() && steps.deploy_api.outputs.started == 'true' }}
+        shell: bash
+        run: |
+          set +e
+          echo 'A deployment or smoke-test step failed. Restoring both captured application images.' >&2
+          az containerapp update \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_API_APP }}' \
+            --image '${{ steps.before.outputs.old_api_image }}' \
+            --revision-suffix "pr55rbapi-${GITHUB_RUN_ID}" \
+            --output none
+          az containerapp update \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_WEB_APP }}' \
+            --image '${{ steps.before.outputs.old_web_image }}' \
+            --revision-suffix "pr55rbweb-${GITHUB_RUN_ID}" \
+            --output none
+          echo 'Application image rollback was requested. Migrations 034 through 039 are additive and remain applied if their transaction committed.' >&2

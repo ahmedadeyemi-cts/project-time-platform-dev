@@ -1,0 +1,147 @@
+{
+  "contract": "flowhive-psa-protected-cutover-v1",
+  "enabled": true,
+  "approvalReference": "FLOWHIVE-PSA-PROTECTED-CUTOVER-20260916-FLOWHIVE-PLANNER-LIVE-CELAR-COMPACT-PROMPT-01",
+  "supersedesApprovalReference": "FLOWHIVE-PSA-PROTECTED-CUTOVER-20260916-FLOWHIVE-PLANNER-LIVE-CELAR-BUDGET-01",
+  "candidate": {
+    "pullRequest": 1054,
+    "branch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+    "sha": "52fe65566669273c2f377a0367d0b404af18c48a"
+  },
+  "workflow": {
+    "id": 315562561,
+    "path": ".github/workflows/projectpulse-deploy-test.yml",
+    "controllerBranch": "main",
+    "event": "workflow_dispatch",
+    "transition": "disabled_manually-to-active-once",
+    "allowControllerActivation": false
+  },
+  "environment": {
+    "environment": "test",
+    "protectionRuleId": 65110773,
+    "requiredReviewerLogin": "ahmedadeyemi-cts",
+    "requiredReviewerId": 244059331,
+    "reviewers": [
+      {
+        "type": "User",
+        "login": "ahmedadeyemi-cts",
+        "id": 244059331
+      }
+    ],
+    "preventSelfReview": false,
+    "canAdminsBypass": false
+  },
+  "requests": [
+    {
+      "runId": 34495606530,
+      "controllerSha": "9f30078c2c407d4d3576ccefd663a145be50c6c4",
+      "headBranch": "main",
+      "event": "workflow_dispatch",
+      "runAttempt": 1,
+      "status": "queued",
+      "conclusion": null,
+      "createdAt": "2026-09-10T15:26:05Z",
+      "updatedAt": "2026-09-10T15:26:05Z",
+      "historicalBlobs": {
+        "admission": "2236a05888afff28cd971c9c2cb13d27017acac3",
+        "dispatcher": "6f960293b8684f837a0f810a3773e95d53469f4e",
+        "deploymentWorkflow": "182da71f9919ac21d42e5c00425f9e881e927a1b"
+      }
+    },
+    {
+      "runId": 34377182662,
+      "controllerSha": "af5fcb463384096f668345ac7cc9bd00efef0a33",
+      "headBranch": "main",
+      "event": "workflow_dispatch",
+      "runAttempt": 1,
+      "status": "queued",
+      "conclusion": null,
+      "createdAt": "2026-09-09T16:30:42Z",
+      "updatedAt": "2026-09-09T16:30:42Z",
+      "historicalBlobs": {
+        "admission": "87681012e101a2403a0a90271a3c16286fbf6028",
+        "dispatcher": "32501e466c75c800d41451631f55ef6902d02d5d",
+        "deploymentWorkflow": "c372c4aa3a532f89fdcf72c62e17b9f3e84dd785"
+      }
+    },
+    {
+      "runId": 33654881418,
+      "controllerSha": "3d02b4cb62683b96554186f9d3a782fc1f21ca54",
+      "headBranch": "fix/shared-project-document-planning-20260819",
+      "event": "workflow_dispatch",
+      "runAttempt": 1,
+      "status": "queued",
+      "conclusion": null,
+      "createdAt": "2026-09-02T16:26:03Z",
+      "updatedAt": "2026-09-02T16:26:03Z",
+      "historicalBlobs": {
+        "deploymentWorkflow": "d22cd6bfed31a9eb1dbf2475ad50a0707029d800"
+      }
+    }
+  ],
+  "serverDispatchInputsConfirmed": false,
+  "approval": {
+    "mode": "native-test-environment",
+    "status": "native-required",
+    "approvedBy": null,
+    "approvedAt": null,
+    "expiresAt": null
+  },
+  "reservationRecovery": {
+    "status": "terminal-skipped-no-mutation",
+    "commentId": 5645243064,
+    "admissionRunId": 34687715702,
+    "admissionRunAttempt": 1,
+    "candidateSha": "86c9be03b87e588eeec47492e35131177716263b",
+    "approvalReference": "FLOWHIVE-PSA-PROTECTED-CUTOVER-20260911",
+    "controllerSha": "e2289c617b69b1a563ee8bd6f01aaa5c54965c6a",
+    "observedAt": "2026-09-12T10:10:03.389Z",
+    "dispatchSubmitted": true,
+    "controllerMutation": false,
+    "deploymentRunId": 34687729664,
+    "deploymentRunAttempt": 1,
+    "dispatchReceipt": {
+      "artifactId": 10296121750,
+      "artifactName": "flowhive-psa-dispatch-evidence-34687715702-1",
+      "artifactDigest": "sha256:dcbd54c84059b52885bc5e54956574c8c01354ddad3efe39a156850e371e378c",
+      "schema": "flowhive-psa-dispatch-attempt-v1",
+      "candidateSha": "86c9be03b87e588eeec47492e35131177716263b",
+      "controllerSha": "e2289c617b69b1a563ee8bd6f01aaa5c54965c6a",
+      "admissionRunId": 34687715702,
+      "admissionRunAttempt": 1,
+      "dispatchPath": "actions/workflows/315562561/dispatches",
+      "dispatchRequestFingerprint": "c4c46ec21d11e1f69e6d375aa2f395b1cd1be8f7f6046823f6e83dd53974f955",
+      "dispatchWriteCount": 1,
+      "deploymentRunId": 34687729664,
+      "deploymentRunAttempt": 1
+    }
+  },
+  "activationDecision": "native-test-required",
+  "successorCheckBinding": {
+    "status": "review-only",
+    "deploymentEligible": false,
+    "candidate": {
+      "pullRequest": 1054,
+      "branch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+      "headSha": "52fe65566669273c2f377a0367d0b404af18c48a",
+      "baseSha": "42022bbc543659abe2f137ca57d0609b42a5f9f1"
+    },
+    "supersedes": {
+      "pullRequest": 1051,
+      "branch": "fix/flowhive-planner-live-celar-budget-main-20260915",
+      "headSha": "93e1359f1631bbcf7026fd59f1620b1f908701db",
+      "installedAcceptanceRunId": 35043700143,
+      "installedAcceptanceConclusion": "failure"
+    },
+    "requiredChecks": [
+      {
+        "workflow": ".github/workflows/flowhive-psa-release-control-ci.yml",
+        "check": "contracts"
+      },
+      {
+        "workflow": ".github/workflows/projectpulse-release-test-control-ci.yml",
+        "check": "Validate governed Test controller, exact scope, and rollback boundaries"
+      }
+    ]
+  }
+}

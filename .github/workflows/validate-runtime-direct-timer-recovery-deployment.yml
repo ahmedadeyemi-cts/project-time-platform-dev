@@ -1,0 +1,22 @@
+name: Validate Functional Runtime UAT Candidate Deployment Control
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/projectpulse-deploy-runtime-direct-timer-recovery-test.yml'
+      - '.github/workflows/validate-runtime-direct-timer-recovery-deployment.yml'
+      - 'scripts/validate-runtime-direct-timer-recovery-test-deployment.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate functional runtime UAT candidate deployment control
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate guarded web-only candidate deployment contract
+        shell: bash
+        run: bash scripts/validate-runtime-direct-timer-recovery-test-deployment.sh

@@ -1,0 +1,70 @@
+# Build outputs
+bin/
+obj/
+dist/
+
+# .NET
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+artifacts/
+
+# Node / frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+src/frontend/project-time-web/src/App.Module001.g.jsx
+src/frontend/project-time-web/src/SystemUserGuide.Module001.g.jsx
+
+# Local environment and secrets
+.env
+.env.*
+*.env
+*.key
+*.p12
+*.pfx
+*.kdbx
+*.jks
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+.npmrc
+.pypirc
+secrets/
+credentials/
+*.kubeconfig
+*.tfstate
+*.tfstate.*
+
+# Database exports and local evidence
+*.dump
+*.sql.gz
+*.bak
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Verity — config under .verity/ IS tracked (smoke.json, deploy.compose.yml,
+# db-bootstrap.sql, deploy.env.example, SHIPYARD.md, deploy-access.md).
+# Only the local/secret/generated files are ignored:
+.verity/deploy.env
+.verity/release.env
+.verity/db-baseline.dump
+.verity/db-baseline.sql
+.verity/db-baseline.marker
+.verity/backups/

@@ -1,0 +1,160 @@
+name: Validate Ask Celar AI Operations and Defect Automation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/celar-ai-ask-operations-ci.yml'
+      - 'database/migrations/084_module_076_celar_ai_defect_operations.sql'
+      - 'database/rollback/084_module_076_celar_ai_defect_operations_rollback.sql'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAi*.cs'
+      - 'src/backend/ProjectTime.Api/Modules/CelarAi*.cs'
+      - 'src/backend/ProjectTime.Api/build/generate-celar-ai-operations-governance.py'
+      - 'src/frontend/project-time-web/scripts/inject-celar-ai-*.mjs'
+      - 'src/frontend/project-time-web/scripts/inject-module-076-*.mjs'
+      - 'src/frontend/project-time-web/src/CelarAiAskOperations.jsx'
+      - 'src/frontend/project-time-web/src/celar-ai-ask-operations.css'
+      - 'tests/CelarAiOperationsPolicyTests/**'
+      - 'tests/celar-ai-operations-evaluation-cases.json'
+      - 'tests/test-module-076-celar-ai-defect-operations-migration-084.sh'
+      - 'tests/validate-celar-ai-pr630-consolidated.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: celar-ai-ask-operations-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate consolidated reliability and Module 076 operations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: projectpulse
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: projectpulse
+      PGDATABASE: postgres
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Validate consolidated source and privacy contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          HEAD_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if [[ "$HEAD_BRANCH" == feature/module025-service-scope-20260921 ]]; then
+            python3 tests/service-scope/release_scope.py
+          elif [[ "$HEAD_BRANCH" == fix/module076-migration084-ci-credentials-* ]]; then
+            git fetch origin main --no-tags
+            BASE="$(git merge-base origin/main HEAD)"
+            mapfile -t CHANGED < <(git diff --name-only "$BASE"...HEAD | sort)
+            EXPECTED=(
+              '.github/workflows/celar-ai-ask-operations-ci.yml'
+              'tests/test-module-076-celar-ai-defect-operations-migration-084.sh'
+            )
+            [[ "${#CHANGED[@]}" -eq "${#EXPECTED[@]}" ]]
+            for index in "${!EXPECTED[@]}"; do
+              [[ "${CHANGED[$index]}" == "${EXPECTED[$index]}" ]]
+            done
+            test -f database/migrations/084_module_076_celar_ai_defect_operations.sql
+            test -f database/rollback/084_module_076_celar_ai_defect_operations_rollback.sql
+            test -f tests/test-module-076-celar-ai-defect-operations-migration-084.sh
+            test -f tests/validate-celar-ai-pr630-consolidated.mjs
+            grep -Fq 'POSTGRES_PASSWORD: projectpulse' .github/workflows/celar-ai-ask-operations-ci.yml
+            grep -Fq 'PGPASSWORD: projectpulse' .github/workflows/celar-ai-ask-operations-ci.yml
+            ! grep -Fq 'POSTGRES_HOST_AUTH_METHOD: trust' .github/workflows/celar-ai-ask-operations-ci.yml
+            grep -Fq 'EVIDENCE_DATABASE=' tests/test-module-076-celar-ai-defect-operations-migration-084.sh
+            grep -Fq 'ROLLBACK_DATABASE=' tests/test-module-076-celar-ai-defect-operations-migration-084.sh
+            ! grep -Fq 'DELETE FROM module076_defect_evidence' tests/test-module-076-celar-ai-defect-operations-migration-084.sh
+            echo 'CELAR_AI_MIGRATION_084_CI_ONLY_SCOPE=PASS'
+          elif [[ "$HEAD_BRANCH" == feature/celar-1am-central-runtime-version-* ]]; then
+            # Module 084 is an Oracle maintenance/runtime-version package, not a
+            # Module 076 defect-operations rewrite. Keep the substantive legacy
+            # tests below, but use its own closed-scope validator instead of the
+            # historical PR630 source whitelist that predates Oracle GitOps.
+            git fetch origin main --no-tags
+            BASE="$(git merge-base origin/main HEAD)"
+            CHANGED="$(git diff --name-only "$BASE"...HEAD)"
+            if grep -E '^database/(migrations|rollback)/' <<<"$CHANGED"; then
+              echo 'Module 084 maintenance work must not add or alter database migrations.' >&2
+              exit 1
+            fi
+            if grep -E '^\.github/workflows/projectpulse-deploy-' <<<"$CHANGED"; then
+              echo 'Module 084 maintenance work may not alter application deployment controllers.' >&2
+              exit 1
+            fi
+            NON_ORACLE_DEPLOYMENT="$(grep -E '^deployment/' <<<"$CHANGED" | grep -Ev '^deployment/oracle-celar/' || true)"
+            if [[ -n "$NON_ORACLE_DEPLOYMENT" ]]; then
+              echo 'Module 084 maintenance work may not alter non-Oracle deployment packages.' >&2
+              printf '%s\n' "$NON_ORACLE_DEPLOYMENT" >&2
+              exit 1
+            fi
+            node src/frontend/project-time-web/scripts/validate-module-084-celar-ai-runtime-version.mjs
+            echo 'CELAR_AI_MODULE_084_MAINTENANCE_SCOPE=PASS'
+          else
+            node tests/validate-celar-ai-pr630-consolidated.mjs
+          fi
+
+      - name: Run universal reliability policy tests
+        run: dotnet run --project tests/CelarAiUniversalAnswerReliabilityTests/CelarAiUniversalAnswerReliabilityTests.csproj --configuration Release
+
+      - name: Run operations policy tests
+        run: dotnet run --project tests/CelarAiOperationsPolicyTests/CelarAiOperationsPolicyTests.csproj --configuration Release
+
+      - name: Validate Migration 084 lifecycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/test-module-076-celar-ai-defect-operations-migration-084.sh
+
+      - name: Build complete API
+        run: dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release
+
+      - name: Build complete frontend
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Ensure validation restored tracked source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --exit-code

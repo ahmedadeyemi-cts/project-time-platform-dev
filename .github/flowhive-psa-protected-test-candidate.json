@@ -1,0 +1,186 @@
+{
+  "contract": "flowhive-psa-protected-test-candidate-v2",
+  "repository": "ahmedadeyemi-cts/project-time-platform",
+  "pullRequest": 1054,
+  "branch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+  "sourceBranch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+  "sha": "52fe65566669273c2f377a0367d0b404af18c48a",
+  "mergeCommit": "b82bea8ad3874e58ab8d42f01017942fa9d8765e",
+  "sourceBase": "42022bbc543659abe2f137ca57d0609b42a5f9f1",
+  "environment": "test",
+  "publicOrigin": "https://phd-west-test.onenecklab.com",
+  "projectId": "0ea25cb8-1a7f-4baf-ba7b-2dd76215be49",
+  "projectManagerLogin": "heather.schrock@ussignal.local",
+  "allowPrivateRuntimeMutation": false,
+  "allowCustomerPublication": false,
+  "allowCanonicalTaskAdoption": false,
+  "requiredWorkflows": [
+    ".github/workflows/celar-ai-enterprise-api-diagnostics.yml",
+    ".github/workflows/celar-ai-production-hardening-ci.yml",
+    ".github/workflows/celar-ai-enterprise-retrieval-ci.yml",
+    ".github/workflows/celar-ai-runtime-rebrand-ci.yml",
+    ".github/workflows/deepseek-v4-provider-ci.yml",
+    ".github/workflows/flowhive-detailed-planner-ci.yml",
+    ".github/workflows/flowhive-enterprise-psa-ci.yml",
+    ".github/workflows/flowhive-psa-release-control-ci.yml",
+    ".github/workflows/module025-governed-protected-test-release-manual.yml",
+    ".github/workflows/project-planning-collaboration-ci.yml",
+    ".github/workflows/projectpulse-ci.yml",
+    ".github/workflows/pulse-ai-private-rag-orchestration-ci.yml",
+    ".github/workflows/pulse-ai-system-intelligence-ci.yml",
+    ".github/workflows/runtime-navigation-work-register-responsive-ci.yml",
+    ".github/workflows/security-posture-ci.yml",
+    ".github/workflows/shared-project-document-planning-ci.yml",
+    ".github/workflows/systemwide-enterprise-reliability-ci.yml"
+  ],
+  "retiredWorkflows": [
+    ".github/workflows/projectpulse-release-test-control-ci-reregistered.yml"
+  ],
+  "workflowExceptions": [],
+  "workflowPathOmissions": [],
+  "workflowDispatchChecks": [
+    {
+      "workflow": ".github/workflows/project-planning-collaboration-ci.yml",
+      "runId": 35048021541,
+      "runAttempt": 1,
+      "event": "workflow_dispatch",
+      "headSha": "52fe65566669273c2f377a0367d0b404af18c48a",
+      "headBranch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+      "conclusion": "success"
+    },
+    {
+      "workflow": ".github/workflows/runtime-navigation-work-register-responsive-ci.yml",
+      "runId": 35048021415,
+      "runAttempt": 1,
+      "event": "workflow_dispatch",
+      "headSha": "52fe65566669273c2f377a0367d0b404af18c48a",
+      "headBranch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+      "conclusion": "success"
+    },
+    {
+      "workflow": ".github/workflows/module025-governed-protected-test-release-manual.yml",
+      "workflowId": 359327006,
+      "runId": 35060353001,
+      "runAttempt": 1,
+      "event": "workflow_dispatch",
+      "headSha": "6bad29fab087f62337bb1515a53e319941bcf190",
+      "headBranch": "main",
+      "controllerSha": "6bad29fab087f62337bb1515a53e319941bcf190",
+      "controllerBranch": "main",
+      "validationMode": "exact-input-candidate",
+      "requestedReleaseSha": "52fe65566669273c2f377a0367d0b404af18c48a",
+      "baseSha": "42022bbc543659abe2f137ca57d0609b42a5f9f1",
+      "validationJobId": 104679175005,
+      "successMarker": "MODULE025_MANUAL_EXACT_CANDIDATE_VALIDATION=PASSED",
+      "conclusion": "success"
+    }
+  ],
+  "workflowDispatchNonRequiredEvidence": [
+    {
+      "workflow": ".github/workflows/flowhive-enterprise-psa-ci.yml",
+      "runId": 35009051752,
+      "runAttempt": 1,
+      "event": "workflow_dispatch",
+      "headSha": "e8a25259e8335233815cb9153f24caf4b4e519e4",
+      "headBranch": "fix/flowhive-planner-celar-transport-20260915",
+      "status": "completed",
+      "conclusion": "failure",
+      "reasonCode": "non-required-manual-validation-failure",
+      "failedStep": "Test resumable observation, identity fencing and bounded network requests",
+      "failedAssertionCount": 3,
+      "satisfiesRequiredCheck": false,
+      "deploymentEligible": false,
+      "disposition": "non-required-evidence-only"
+    }
+  ],
+  "successorCheckBinding": {
+    "status": "review-only",
+    "deploymentEligible": false,
+    "candidate": {
+      "pullRequest": 1054,
+      "branch": "fix/flowhive-planner-live-celar-compact-prompt-20260916",
+      "headSha": "52fe65566669273c2f377a0367d0b404af18c48a",
+      "baseSha": "42022bbc543659abe2f137ca57d0609b42a5f9f1"
+    },
+    "supersedes": {
+      "pullRequest": 1051,
+      "branch": "fix/flowhive-planner-live-celar-budget-main-20260915",
+      "headSha": "93e1359f1631bbcf7026fd59f1620b1f908701db",
+      "installedAcceptanceRunId": 35043700143,
+      "installedAcceptanceConclusion": "failure"
+    },
+    "requiredChecks": [
+      {
+        "workflow": ".github/workflows/flowhive-psa-release-control-ci.yml",
+        "check": "contracts"
+      },
+      {
+        "workflow": ".github/workflows/projectpulse-release-test-control-ci.yml",
+        "check": "Validate governed Test controller, exact scope, and rollback boundaries"
+      }
+    ]
+  },
+  "historicalCandidateEvidence": {
+    "pullRequest": 1037,
+    "branch": "fix/flowhive-planner-live-capacity-repair-20260915",
+    "sha": "3c1230e422b55a746a2dde2b534ec94c9dd6678b",
+    "mergeCommit": "1d11b029ca7c63551af71a098b7a7f4618ce290b",
+    "sourceBase": "34a0f8fbbe7e79447cdf022d55ba8fb1bdf9c987",
+    "requiredWorkflows": [
+      ".github/workflows/celar-ai-production-hardening-ci.yml",
+      ".github/workflows/celar-ai-enterprise-retrieval-ci.yml",
+      ".github/workflows/celar-ai-runtime-rebrand-ci.yml",
+      ".github/workflows/deepseek-v4-provider-ci.yml",
+      ".github/workflows/flowhive-detailed-planner-ci.yml",
+      ".github/workflows/flowhive-enterprise-psa-ci.yml",
+      ".github/workflows/flowhive-psa-release-control-ci.yml",
+      ".github/workflows/projectpulse-ci.yml",
+      ".github/workflows/pulse-ai-private-rag-orchestration-ci.yml",
+      ".github/workflows/pulse-ai-system-intelligence-ci.yml",
+      ".github/workflows/runtime-navigation-work-register-responsive-ci.yml",
+      ".github/workflows/security-posture-ci.yml",
+      ".github/workflows/shared-project-document-planning-ci.yml",
+      ".github/workflows/systemwide-enterprise-reliability-ci.yml"
+    ],
+    "workflowPathOmissions": [
+      {
+        "workflow": ".github/workflows/enterprise-experience-system-ci.yml",
+        "reasonCode": "pull-request-path-filter-no-match",
+        "baseCommit": "34a0f8fbbe7e79447cdf022d55ba8fb1bdf9c987",
+        "baseWorkflowSha256": "2ca0b78a5d3d5fa6cacfd58f0a4fbdefd944a1ace08adbf936bf5624c69e748c",
+        "candidateChangedFilesSha256": "b4587a3c24dab20a92234efefdd21ef0906173eaab553c6ce993008aec374b43",
+        "candidateChangedFilesCount": 5
+      },
+      {
+        "workflow": ".github/workflows/celar-ai-enterprise-api-diagnostics.yml",
+        "reasonCode": "pull-request-path-filter-no-match",
+        "baseCommit": "34a0f8fbbe7e79447cdf022d55ba8fb1bdf9c987",
+        "baseWorkflowSha256": "d3fb31f6495c8e8b65d7962e796cac472170b5957c41f50f694c517e04ebef5b",
+        "candidateChangedFilesSha256": "b4587a3c24dab20a92234efefdd21ef0906173eaab553c6ce993008aec374b43",
+        "candidateChangedFilesCount": 5
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "file": "103_module_066_flowhive_enterprise_psa_revamp.sql",
+      "sha256": "d0f11a62f081f26b6bbc9eb589f6387f6098674353c27d6b7f8cce4ddd89229a"
+    },
+    {
+      "file": "104_flowhive_bounded_ai_execution.sql",
+      "sha256": "53897dcac37294599339770a3ade51d6af3c26b240d5706c939d443eacad5486"
+    },
+    {
+      "file": "105_flowhive_reviewed_regeneration.sql",
+      "sha256": "64c1a1c0ca77816207be2d0c873367c8e6d3a61a38cc41b1df88923774da688e"
+    },
+    {
+      "file": "106_module025_sow_sell_register.sql",
+      "sha256": "7b0db0d4b2851344edcc5cc2703f130c70d00460a5859065ca420ffdf14e1dd3"
+    },
+    {
+      "file": "107_module_066_operation_authorization_and_raid_actor.sql",
+      "sha256": "61a293640223899f187d0e74be263c4a97c9fae7919aac6ddca5ab0fa683f386"
+    }
+  ]
+}

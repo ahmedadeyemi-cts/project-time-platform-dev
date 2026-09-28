@@ -1,0 +1,471 @@
+/* Celar AI contextual chat: a normal working companion by default, with
+   explicit compact/wide/fullscreen controls and user-driven resize support. */
+.help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat {
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+  right: 24px;
+  bottom: 84px;
+  width: min(560px, calc(100vw - 40px));
+  height: min(720px, calc(100dvh - 116px));
+  min-width: min(420px, calc(100vw - 24px));
+  min-height: min(440px, calc(100dvh - 96px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 104px);
+  resize: both;
+  overflow: hidden;
+  border-radius: 20px;
+  box-shadow: 0 24px 72px rgba(4, 30, 61, 0.28);
+  transform: translate(var(--celar-chat-x, 0), var(--celar-chat-y, 0));
+  will-change: width, height, transform;
+}
+
+.help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat.is-size-compact {
+  width: min(440px, calc(100vw - 40px));
+  height: min(590px, calc(100dvh - 116px));
+}
+
+.help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat.is-size-standard {
+  width: min(560px, calc(100vw - 40px));
+  height: min(720px, calc(100dvh - 116px));
+}
+
+.help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat.is-size-wide {
+  width: min(900px, calc(100vw - 40px));
+  height: min(790px, calc(100dvh - 116px));
+}
+
+.help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat.is-size-fullscreen {
+  inset: 18px;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  resize: none;
+  transform: none;
+}
+
+.help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat.is-minimized {
+  grid-template-rows: auto;
+  width: min(390px, calc(100vw - 32px));
+  height: 64px;
+  min-width: 300px;
+  min-height: 64px;
+  max-height: 64px;
+  resize: none;
+}
+
+.celar-ai-chat-drag-handle {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.celar-ai-chat-drag-handle .celar-ai-chat-window-controls,
+.celar-ai-chat-drag-handle button,
+.help-panel.celar-ai-contextual-chat.is-size-fullscreen .celar-ai-chat-drag-handle,
+.help-panel.celar-ai-contextual-chat.is-minimized .celar-ai-chat-drag-handle {
+  cursor: default;
+}
+
+.help-panel.celar-ai-contextual-chat.is-minimized > :not(.help-header) {
+  display: none !important;
+}
+
+.celar-ai-contextual-chat .help-header {
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.celar-ai-contextual-chat .help-header > div:first-child {
+  min-width: 0;
+}
+
+.celar-ai-contextual-chat .help-header strong,
+.celar-ai-contextual-chat .help-header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.celar-ai-chat-window-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.celar-ai-chat-window-controls button {
+  width: 32px;
+  min-width: 32px !important;
+  height: 32px;
+  min-height: 32px !important;
+  padding: 0;
+  font-size: 0.76rem;
+}
+
+.celar-ai-chat-window-controls button.is-active {
+  border-color: var(--brand-blue);
+  background: color-mix(in srgb, var(--brand-blue) 13%, var(--surface));
+  color: var(--brand-blue-strong);
+}
+
+.celar-ai-chat-window-controls .celar-ai-chat-close {
+  font-size: 1.05rem;
+}
+
+.celar-ai-context-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 91%, #e5f7fb 9%);
+}
+
+.celar-ai-context-bar > div {
+  display: grid;
+  gap: 0.08rem;
+  min-width: 0;
+}
+
+.celar-ai-context-bar strong {
+  color: var(--text);
+  font-size: 0.7rem;
+}
+
+.celar-ai-context-bar span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.61rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.celar-ai-context-bar button {
+  flex: 0 0 auto;
+  min-width: auto !important;
+  min-height: 32px !important;
+  border: 1px solid color-mix(in srgb, var(--brand-blue) 35%, var(--border));
+  border-radius: 9px;
+  padding: 0.38rem 0.58rem;
+  background: var(--surface);
+  color: var(--brand-blue-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.64rem;
+  font-weight: 850;
+}
+
+.celar-ai-contextual-chat .pulse-ai-conversation-toolbar {
+  display: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.55rem 0.7rem;
+}
+
+.celar-ai-contextual-chat .pulse-ai-conversation-toolbar.is-open {
+  display: grid;
+}
+
+.celar-ai-contextual-chat .pulse-ai-conversation-toolbar > span {
+  grid-column: 1 / -1;
+  justify-self: start;
+  text-align: left;
+}
+
+.celar-ai-chat-governance {
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.celar-ai-chat-governance > summary {
+  padding: 0.42rem 0.75rem;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.62rem;
+  font-weight: 850;
+  list-style-position: inside;
+}
+
+.celar-ai-chat-governance[open] > summary {
+  color: var(--brand-blue-strong);
+}
+
+.celar-ai-contextual-chat .help-quick-actions {
+  padding: 8px;
+}
+
+.celar-ai-contextual-chat .help-full-guide-button,
+.celar-ai-contextual-chat .help-pulse-ai-button,
+.celar-ai-contextual-chat .help-report-defect-button {
+  min-height: 34px;
+  padding: 6px 7px;
+  font-size: 0.63rem;
+}
+
+.celar-ai-contextual-chat .help-messages {
+  min-height: 0;
+  padding: 0.7rem;
+  scroll-padding-bottom: 1rem;
+}
+
+.celar-ai-contextual-chat .pulse-ai-system-answer {
+  padding: 0.72rem;
+}
+
+.celar-ai-contextual-chat .help-suggestions {
+  min-height: 45px;
+  padding: 0.42rem 0.55rem !important;
+}
+
+.celar-ai-contextual-chat .help-suggestions button {
+  max-width: 235px !important;
+  padding: 0.36rem 0.55rem !important;
+  font-size: 0.59rem !important;
+}
+
+.celar-ai-contextual-chat .help-input-row {
+  padding: 0.6rem !important;
+}
+
+.celar-ai-contextual-chat .help-input-row textarea {
+  min-height: 58px !important;
+  max-height: 145px !important;
+}
+
+.celar-ai-contextual-chat .help-input-row > button {
+  min-width: 72px !important;
+}
+
+.celar-ai-chat-resize-note {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  z-index: 2;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  font-size: 0.54rem;
+}
+
+.celar-ai-project-context-picker {
+  position: relative;
+  grid-column: span 2;
+}
+
+.celar-ai-people-team-context-picker {
+  position: relative;
+  grid-column: span 2;
+}
+
+.celar-ai-project-combobox {
+  position: relative;
+}
+
+.celar-ai-project-suggestions {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: min(280px, 36dvh);
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--brand-blue) 38%, var(--border));
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgba(4, 30, 61, .22);
+}
+
+.celar-ai-project-suggestions button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 48px !important;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.celar-ai-project-suggestions button:last-child { border-bottom: 0; }
+.celar-ai-project-suggestions button:hover,
+.celar-ai-project-suggestions button:focus-visible,
+.celar-ai-project-suggestions button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--brand-blue) 10%, var(--surface));
+  outline: none;
+}
+.celar-ai-project-suggestions strong { font-size: .74rem; }
+.celar-ai-project-suggestions span,
+.celar-ai-project-context-picker > small { color: var(--muted); font-size: .62rem; line-height: 1.3; }
+.celar-ai-project-context-picker > small.celar-ai-project-context-error,
+.celar-ai-people-team-context-picker > small.celar-ai-project-context-error { color: #a84b14; }
+
+.help-panel.celar-ai-contextual-chat.is-size-fullscreen .celar-ai-chat-resize-note,
+.help-panel.celar-ai-contextual-chat.is-minimized .celar-ai-chat-resize-note {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat,
+  .help-panel.celar-ai-contextual-chat.is-size-compact,
+  .help-panel.celar-ai-contextual-chat.is-size-standard,
+  .help-panel.celar-ai-contextual-chat.is-size-wide {
+    right: 10px;
+    bottom: 76px;
+    width: min(620px, calc(100vw - 20px));
+    height: min(720px, calc(100dvh - 92px));
+    min-width: min(380px, calc(100vw - 20px));
+    min-height: 400px;
+  }
+
+  .celar-ai-chat-window-controls button[data-size="compact"],
+  .celar-ai-chat-window-controls button[data-size="wide"] {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .help-panel.pulse-ai-help-panel.pulse-ai-system-chat.celar-ai-contextual-chat,
+  .help-panel.celar-ai-contextual-chat.is-size-compact,
+  .help-panel.celar-ai-contextual-chat.is-size-standard,
+  .help-panel.celar-ai-contextual-chat.is-size-wide,
+  .help-panel.celar-ai-contextual-chat.is-size-fullscreen {
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    min-width: 0;
+    min-height: 0;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+    resize: none;
+    transform: none;
+  }
+
+  .help-panel.celar-ai-contextual-chat.is-minimized {
+    top: auto;
+    right: 8px;
+    bottom: 68px;
+    left: auto;
+    width: calc(100vw - 16px);
+    height: 62px;
+    min-height: 62px;
+    border-radius: 16px;
+  }
+
+  .celar-ai-contextual-chat .help-quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .celar-ai-context-bar span {
+    white-space: normal;
+  }
+
+  .celar-ai-chat-resize-note {
+    display: none;
+  }
+
+  .celar-ai-project-context-picker { grid-column: 1; }
+}
+.celar-ai-chat-attachments {
+  border-top: 1px solid var(--border, #d8e0ea);
+  background: color-mix(in srgb, var(--surface, #fff) 94%, var(--accent, #0b6cb8));
+}
+
+.celar-ai-chat-attachments-summary {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-height: 3.25rem;
+  padding: .65rem 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.celar-ai-chat-attachments-summary::-webkit-details-marker { display: none; }
+.celar-ai-chat-attachments-summary > span:nth-child(2) { display: grid; gap: .1rem; min-width: 0; flex: 1; }
+.celar-ai-chat-attachments-summary small { color: var(--text-muted, #5c6878); font-size: .72rem; }
+.celar-ai-chat-attachments-icon { display: grid; place-items: center; width: 1.8rem; height: 1.8rem; border-radius: .55rem; background: color-mix(in srgb, var(--accent, #0b6cb8) 13%, transparent); color: var(--accent, #0b6cb8); font-size: 1.25rem; }
+.celar-ai-chat-attachments-toggle { color: var(--accent, #0b6cb8); font-size: .75rem; font-weight: 700; }
+.celar-ai-chat-attachments[open] .celar-ai-chat-attachments-toggle { font-size: 0; }
+.celar-ai-chat-attachments[open] .celar-ai-chat-attachments-toggle::after { content: 'Collapse'; font-size: .75rem; }
+.celar-ai-chat-attachments-body { display: grid; gap: .55rem; padding: 0 1rem .85rem; }
+
+.celar-ai-chat-attachments-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .75rem;
+}
+
+.celar-ai-chat-attachments-title { display: flex; align-items: center; gap: .65rem; min-width: 0; }
+.celar-ai-chat-attachments-title > div { display: grid; gap: .2rem; min-width: 0; }
+.celar-ai-chat-attachments-heading .celar-ai-chat-attachments-icon { display: grid; flex: 0 0 auto; width: 2.15rem; height: 2.15rem; place-items: center; border-radius: .7rem; background: var(--brand-blue, #0b6cb8); color: #fff; }
+.celar-ai-chat-attachments-icon svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.celar-ai-chat-attachments-title > div > span { font-size: .75rem; line-height: 1.35; color: var(--text-muted, #5c6878); }
+.celar-ai-chat-attachments-heading .celar-ai-chat-private-badge { flex: 0 0 auto; border: 1px solid color-mix(in srgb, #3f7f2d 35%, var(--border, #d8e0ea)); border-radius: 999px; padding: .28rem .5rem; background: color-mix(in srgb, var(--surface, #fff) 78%, #dcfce7); color: #315d22; font-size: .66rem; font-weight: 850; }
+.celar-ai-chat-attachment-button {
+  display: grid;
+  flex: 0 0 auto;
+  width: 3.2rem;
+  min-width: 3.2rem !important;
+  height: 3.2rem;
+  min-height: 3.2rem !important;
+  place-items: center;
+  border: 0;
+  border-radius: .78rem;
+  background: var(--brand-blue, #0b6cb8);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--brand-blue, #0b6cb8) 28%, transparent);
+  transition: transform .16s ease, filter .16s ease, box-shadow .16s ease;
+}
+.celar-ai-chat-attachment-button:hover:not(:disabled),
+.celar-ai-chat-attachment-button:focus-visible { filter: brightness(1.08); transform: translateY(-1px); outline: 3px solid color-mix(in srgb, var(--brand-blue, #0b6cb8) 22%, transparent); }
+.celar-ai-chat-attachment-button:disabled { cursor: progress; opacity: .58; }
+.celar-ai-chat-attachment-button svg { width: 1.45rem; height: 1.45rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.celar-ai-chat-file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.celar-ai-chat-dropzone {
+  display: grid;
+  justify-items: center;
+  gap: .18rem;
+  padding: .8rem .75rem;
+  border: 1.5px dashed color-mix(in srgb, var(--brand-blue, #0b6cb8) 52%, var(--border-strong, #8493a5));
+  border-radius: .7rem;
+  background: color-mix(in srgb, var(--surface, #fff) 90%, transparent);
+  text-align: center;
+  font-size: .78rem;
+  color: var(--text-muted, #5c6878);
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.celar-ai-chat-dropzone span { font-size: .7rem; }
+
+.celar-ai-chat-dropzone strong { color: var(--text, #16243a); font-size: .8rem; }
+.celar-ai-chat-dropzone > span:last-child { font-size: .67rem; }
+.celar-ai-chat-upload-mark { display: grid; width: 1.9rem; height: 1.9rem; place-items: center; border-radius: .55rem; background: var(--brand-blue, #0b6cb8); color: #fff; }
+.celar-ai-chat-upload-mark svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.celar-ai-chat-dropzone:hover,
+.celar-ai-chat-dropzone:focus-visible,
+.celar-ai-chat-dropzone.is-dragging { border-color: var(--accent, #0b6cb8); background: color-mix(in srgb, var(--accent, #0b6cb8) 9%, var(--surface, #fff)); outline: none; transform: translateY(-1px); }
+.celar-ai-chat-attachment-error { color: var(--danger, #a52424); font-size: .8rem; }
+.celar-ai-chat-attachment-list { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; max-height: 8rem; overflow: auto; }
+.celar-ai-chat-attachment-list li { display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding: .55rem .6rem; border: 1px solid var(--border, #d8e0ea); border-radius: .58rem; background: var(--surface, #fff); }
+.celar-ai-chat-attachment-list label { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.celar-ai-chat-attachment-list label span { display: grid; min-width: 0; }
+.celar-ai-chat-attachment-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.celar-ai-chat-attachment-list small { color: var(--text-muted, #5c6878); }
+
+@media (max-width: 640px) {
+  .celar-ai-chat-attachments-heading { display: grid; }
+  .celar-ai-chat-attachments-heading .celar-ai-chat-private-badge { justify-self: start; }
+}

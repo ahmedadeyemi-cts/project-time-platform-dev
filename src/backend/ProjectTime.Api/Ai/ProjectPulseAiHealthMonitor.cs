@@ -1,0 +1,169 @@
+namespace ProjectTime.Api.Ai;
+
+public sealed class ProjectPulseAiHealthCoordinator
+{
+    private readonly ProjectPulseAiConfiguration _configuration;
+    private readonly IReadOnlyDictionary<string, IProjectPulseAiProvider> _providers;
+    private readonly ProjectPulseAiHealthRegistry _health;
+    private readonly SemaphoreSlim _refreshLock = new(1, 1);
+
+    public ProjectPulseAiHealthCoordinator(
+        ProjectPulseAiConfiguration configuration,
+        IEnumerable<IProjectPulseAiProvider> providers,
+        ProjectPulseAiHealthRegistry health)
+    {
+        _configuration = configuration;
+        _providers = providers.ToDictionary(provider => provider.Code, StringComparer.OrdinalIgnoreCase);
+        _health = health;
+    }
+
+    public async Task<IReadOnlyList<ProjectPulseAiProviderHealthSnapshot>> RefreshAsync(
+        bool force,
+        CancellationToken cancellationToken)
+    {
+        if (!await _refreshLock.WaitAsync(0, cancellationToken))
+        {
+            return _health.Snapshots();
+        }
+
+        try
+        {
+            var maximumAge = TimeSpan.FromSeconds(_configuration.HealthIntervalSeconds);
+            foreach (var provider in _providers.Values)
+            {
+                // Encrypted secrets and provider settings can load after the health
+                // registry is constructed. Always reconcile from the live shared
+                // configuration before deciding whether a provider can be probed.
+                var liveConfiguration = _configuration.Provider(provider.Code);
+                _health.ApplyConfiguration(liveConfiguration);
+
+                var snapshot = _health.Snapshot(provider.Code);
+                if (!snapshot.Enabled || !snapshot.Configured) continue;
+                if (!_health.ShouldProbe(provider.Code, maximumAge, force)) continue;
+                if (!force && !_health.CanAttempt(provider.Code, out _)) continue;
+
+                _health.MarkProbeStarted(provider.Code);
+                ProjectPulseAiProbeResult result;
+                try
+                {
+                    result = await provider.ProbeAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    result = new ProjectPulseAiProbeResult(
+                        provider.Code,
+                        false,
+                        "health_probe_failed",
+                        "Provider health probe failed.",
+                        null,
+                        null);
+                }
+
+                var currentConfiguration = _configuration.Provider(provider.Code);
+                if (liveConfiguration.Model != currentConfiguration.Model
+                    || liveConfiguration.Endpoint != currentConfiguration.Endpoint
+                    || liveConfiguration.Secret.Fingerprint != currentConfiguration.Secret.Fingerprint)
+                {
+                    _health.ApplyConfiguration(currentConfiguration);
+                    _health.DiscardStaleProbe(provider.Code);
+                    continue;
+                }
+                _health.RecordProbe(result);
+            }
+
+            return _health.Snapshots();
+        }
+        finally
+        {
+            _refreshLock.Release();
+        }
+    }
+}
+
+public sealed class ProjectPulseAiHealthMonitor : BackgroundService
+{
+    private readonly ProjectPulseAiConfiguration _configuration;
+    private readonly ProjectPulseAiHealthCoordinator _coordinator;
+    private readonly ILogger<ProjectPulseAiHealthMonitor> _logger;
+    private readonly CelarAiCapabilityRoutingStore _privateStore;
+    private readonly CelarAiPrivateGenerationTarget _privateTarget;
+    private readonly ProjectPulseAiHealthRegistry _health;
+
+    public ProjectPulseAiHealthMonitor(
+        ProjectPulseAiConfiguration configuration,
+        ProjectPulseAiHealthCoordinator coordinator,
+        ILogger<ProjectPulseAiHealthMonitor> logger,
+        CelarAiCapabilityRoutingStore privateStore,
+        CelarAiPrivateGenerationTarget privateTarget,
+        ProjectPulseAiHealthRegistry health)
+    {
+        _configuration = configuration;
+        _coordinator = coordinator;
+        _logger = logger;
+        _privateStore = privateStore;
+        _privateTarget = privateTarget;
+        _health = health;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        if (ProjectPulseAiReleaseRuntimePolicy.RequireValid().IsCandidate)
+        {
+            _logger.LogInformation(
+                "Module 064 background provider health probes are disabled in the release-candidate phase; the combined verification request owns all candidate probes.");
+            return;
+        }
+
+        // Run once after startup and keep the result current. The independent
+        // database loader reconciles the shared registry again when its bounded
+        // asynchronous hydration completes.
+        await RefreshSafely(stoppingToken);
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(_configuration.HealthIntervalSeconds));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            await RefreshSafely(stoppingToken);
+        }
+    }
+
+    private async Task RefreshSafely(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _coordinator.RefreshAsync(false, cancellationToken);
+            // A private readiness phrase carries no customer content. Keep its
+            // evidence fresh even when no administrator has this page open.
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bounded.CancelAfter(TimeSpan.FromSeconds(45));
+            var profile = await _privateStore.LoadPrivateModelProfileAsync(bounded.Token);
+            ProjectPulseAiProbeResult result;
+            try
+            {
+                result = await _privateTarget.ProbeAsync(profile, bounded.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                result = new("celar_ai", false, "private_probe_timeout", "Private readiness check timed out.", null, null);
+            }
+            _health.RecordProbe(result);
+            await _privateStore.SavePrivateProbeEvidenceAsync(profile, result,
+                TimeSpan.FromSeconds(Math.Max(_configuration.HealthIntervalSeconds * 2, 60)),
+                cancellationToken);
+            if (!result.Available)
+                _logger.LogWarning("Module 064 Celar AI availability check failed: {Code}", result.Code);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Module 064 background provider health refresh failed.");
+        }
+    }
+}

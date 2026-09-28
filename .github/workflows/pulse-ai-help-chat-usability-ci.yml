@@ -1,0 +1,384 @@
+name: Validate Pulse AI Help Chat Usability
+
+on:
+  push:
+    branches:
+      - 'fix/module-011-help-chat-usability-*'
+      - 'feature/module-011-system-intelligence-troubleshooting-*'
+      - 'feature/module-011-celar-ai-runtime-rebrand-*'
+  pull_request:
+    paths:
+      - '.github/workflows/pulse-ai-help-chat-usability-ci.yml'
+      - '.github/workflows/group5-financial-operations-recovery-ci.yml'
+      - 'src/frontend/project-time-web/package.json'
+      - 'src/frontend/project-time-web/package-lock.json'
+      - 'src/frontend/project-time-web/src/pulse-ai-help-chat-usability.js'
+      - 'src/frontend/project-time-web/src/pulse-ai-help-chat-usability.css'
+      - 'src/frontend/project-time-web/src/main.jsx'
+      - 'src/frontend/project-time-web/src/HelpAssistant.jsx'
+      - 'src/frontend/project-time-web/scripts/validate-pulse-ai-help-chat-usability.mjs'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiProductKnowledgeCatalog.cs'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiQuestionPlanner.cs'
+      - 'src/backend/ProjectTime.Api/ProjectTime.Api.csproj'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pulse-ai-help-chat-usability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify Help-chat ownership, Module 011 integration, consolidated release, or regression mode
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE_BRANCH="${GITHUB_BASE_REF:-main}"
+          HEAD_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          git fetch origin "$BASE_BRANCH" --no-tags
+          CHANGED="$(git diff --name-only "origin/$BASE_BRANCH"...HEAD)"
+          printf '%s\n' "$CHANGED"
+
+          HELP_RUNTIME_OWNED='^(src/frontend/project-time-web/src/(pulse-ai-help-chat-usability\.js|pulse-ai-help-chat-usability\.css|HelpAssistant\.jsx)|src/frontend/project-time-web/scripts/validate-pulse-ai-help-chat-usability\.mjs|src/backend/ProjectTime\.Api/Ai/(PulseAiProductKnowledgeCatalog|PulseAiQuestionPlanner)\.cs)$'
+          CENTRAL_HELP_CONVERGENCE='^src/frontend/project-time-web/src/HelpAssistant\.jsx$'
+
+          for protected in \
+            '.github/workflows/projectpulse-deploy-runtime-direct-timer-recovery-test.yml' \
+            '.github/workflows/validate-runtime-direct-timer-recovery-deployment.yml' \
+            'scripts/validate-runtime-direct-timer-recovery-test-deployment.sh'; do
+            if grep -Fxq "$protected" <<<"$CHANGED"; then
+              echo "Protected deployment file changed: $protected" >&2
+              exit 1
+            fi
+          done
+
+          case "$HEAD_BRANCH" in
+            fix/flowhive-sow-private-generation-20260921)
+              python3 tests/flowhive-sow-private-generation-scope.py
+              echo "PULSE_AI_HELP_CHAT_VALIDATION_MODE=CONNECTWISE_REGRESSION" >> "$GITHUB_ENV"
+              ;;
+            fix/module025-private-generation-recovery)
+              python3 tests/module025-private-generation-scope.py
+              echo "PULSE_AI_HELP_CHAT_VALIDATION_MODE=CONNECTWISE_REGRESSION" >> "$GITHUB_ENV"
+              ;;
+            fix/connectwise-sell-module026)
+              python3 tests/connectwise-sell-release-scope.py
+              echo "PULSE_AI_HELP_CHAT_VALIDATION_MODE=CONNECTWISE_REGRESSION" >> "$GITHUB_ENV"
+              ;;
+            fix/module-011-help-chat-usability-*)
+              ALLOWED='^(\.github/workflows/(pulse-ai-help-chat-usability-ci|group5-financial-operations-recovery-ci)\.yml|src/frontend/project-time-web/package(-lock)?\.json|src/frontend/project-time-web/src/(pulse-ai-help-chat-usability\.js|pulse-ai-help-chat-usability\.css|main\.jsx|HelpAssistant\.jsx)|src/frontend/project-time-web/scripts/validate-pulse-ai-help-chat-usability\.mjs|src/backend/ProjectTime\.Api/Ai/(PulseAiProductKnowledgeCatalog|PulseAiQuestionPlanner)\.cs|src/backend/ProjectTime\.Api/ProjectTime.Api.csproj)$'
+              UNEXPECTED="$(grep -Ev "$ALLOWED" <<<"$CHANGED" || true)"
+              if [[ -n "$UNEXPECTED" ]]; then
+                echo 'Unexpected Pulse AI Help chat hotfix scope:' >&2
+                printf '%s\n' "$UNEXPECTED" >&2
+                exit 1
+              fi
+              if grep -E '^(database/|deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED"; then
+                echo 'The Help chat hotfix cannot include a migration or deployment operation.' >&2
+                exit 1
+              fi
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=OWNED_SOURCE' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_SOURCE_ISOLATION=PASSED'
+              ;;
+            feature/module-011-system-intelligence-troubleshooting-*|feature/module-011-celar-ai-runtime-rebrand-*|fix/post-pr465-module011-065-celar-uat-*)
+              UNEXPECTED_DATABASE="$(grep -E '^database/' <<<"$CHANGED" \
+                | grep -Ev '^database/(migrations/054_pulse_ai_system_intelligence_conversations\.sql|rollback/054_pulse_ai_system_intelligence_conversations_rollback\.sql)$' \
+                || true)"
+              if [[ -n "$UNEXPECTED_DATABASE" ]]; then
+                echo 'Unexpected database scope in later Module 011 Help integration:' >&2
+                printf '%s\n' "$UNEXPECTED_DATABASE" >&2
+                exit 1
+              fi
+              UNEXPECTED_DEPLOYMENT="$(grep -E '^(deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED" || true)"
+              if [[ "$HEAD_BRANCH" == feature/module-011-celar-ai-runtime-rebrand-* ]]; then
+                UNEXPECTED_DEPLOYMENT="$(grep -Fvx 'deployment/containers/web/Dockerfile' <<<"$UNEXPECTED_DEPLOYMENT" || true)"
+              fi
+              if [[ -n "$UNEXPECTED_DEPLOYMENT" ]]; then
+                echo 'The Help chat integration workflow cannot validate a deployment operation.' >&2
+                printf '%s\n' "$UNEXPECTED_DEPLOYMENT" >&2
+                exit 1
+              fi
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=LATER_MODULE_011_INTEGRATION' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_LATER_MODULE_011_INTEGRATION=PASSED'
+              ;;
+            feature/celar-ai-unified-chat-routing-attachments-*)
+              UNEXPECTED_DATABASE="$(grep -E '^database/' <<<"$CHANGED" \
+                | grep -Ev '^database/(migrations/072_celar_ai_conversation_attachments\.sql|rollback/072_celar_ai_conversation_attachments_rollback\.sql)$' \
+                || true)"
+              if [[ -n "$UNEXPECTED_DATABASE" ]]; then
+                echo 'Unexpected database scope in the unified Celar AI Help-chat package:' >&2
+                printf '%s\n' "$UNEXPECTED_DATABASE" >&2
+                exit 1
+              fi
+              UNAUTHORIZED_DEPLOYMENT="$(grep -E '^(deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED" || true)"
+              if [[ -n "$UNAUTHORIZED_DEPLOYMENT" ]]; then
+                echo 'The unified Celar AI Help-chat validation cannot include a deployment operation:' >&2
+                printf '%s\n' "$UNAUTHORIZED_DEPLOYMENT" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/072_celar_ai_conversation_attachments.sql' \
+                'database/rollback/072_celar_ai_conversation_attachments_rollback.sql' \
+                'src/frontend/project-time-web/src/HelpAssistant.jsx' \
+                'src/frontend/project-time-web/src/pulse-ai-help-chat-usability.js' \
+                'src/frontend/project-time-web/scripts/validate-celar-ai-unified-chat-attachments.mjs'; do
+                grep -Fxq "$required" <<<"$CHANGED"
+              done
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=UNIFIED_CHAT_ATTACHMENTS' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_UNIFIED_CHAT_ATTACHMENTS=PASSED'
+              ;;
+            release/consolidated-enterprise-validation-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              UNAPPROVED_HELP="$(grep -Ev "$CENTRAL_HELP_CONVERGENCE" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The consolidated release changed Help-chat runtime source outside the reviewed convergence boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              UNAUTHORIZED_DEPLOYMENT="$(grep -E '^(deployment/azure/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED" || true)"
+              if [[ -n "$UNAUTHORIZED_DEPLOYMENT" ]]; then
+                echo 'The consolidated Help-chat validation cannot include an unauthorized deployment operation:' >&2
+                printf '%s\n' "$UNAUTHORIZED_DEPLOYMENT" >&2
+                exit 1
+              fi
+              test -f docs/releases/2026-08-02-consolidated-enterprise-validation.md
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=CONSOLIDATED_RELEASE' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_CONSOLIDATED_RELEASE=PASSED'
+              ;;
+            feature/enterprise-operations-ux-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              UNAPPROVED_HELP="$(grep -Ev "$CENTRAL_HELP_CONVERGENCE" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The enterprise operations package changed Help-chat runtime source outside the reviewed HelpAssistant boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              if grep -E '^(database/|deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED"; then
+                echo 'The enterprise operations Help-chat validation cannot include a migration or deployment operation.' >&2
+                exit 1
+              fi
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=ENTERPRISE_OPERATIONS' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_ENTERPRISE_OPERATIONS=PASSED'
+              ;;
+            security/repository-posture-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              UNAPPROVED_HELP="$(grep -Ev "$CENTRAL_HELP_CONVERGENCE" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The central security posture branch changed Help-chat source outside the reviewed canonical-source convergence boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=CENTRAL_SECURITY_CONVERGENCE' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_CENTRAL_SECURITY_CONVERGENCE=PASSED'
+              ;;
+            security/celar-ai-production-readiness-knowledge-fabric-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              KNOWLEDGE_FABRIC_HELP_BOUNDARY='^src/backend/ProjectTime\.Api/Ai/PulseAiProductKnowledgeCatalog\.cs$'
+              UNAPPROVED_HELP="$(grep -Ev "$KNOWLEDGE_FABRIC_HELP_BOUNDARY" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The knowledge-fabric package changed Help-chat runtime source outside the reviewed product-knowledge catalog boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              if grep -E '^(database/|deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED"; then
+                echo 'The knowledge-fabric Help-chat validation cannot include a migration or deployment operation.' >&2
+                exit 1
+              fi
+              for required in \
+                'src/frontend/project-time-web/src/HelpAssistant.jsx' \
+                'src/backend/ProjectTime.Api/Ai/PulseAiSystemIntelligenceService.cs' \
+                'src/backend/ProjectTime.Api/Ai/CelarAiCapabilityRouting.cs' \
+                'src/frontend/project-time-web/scripts/validate-celar-ai-unified-chat-attachments.mjs'; do
+                test -f "$required"
+                git cat-file -e "origin/$BASE_BRANCH:$required"
+              done
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=KNOWLEDGE_FABRIC' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_KNOWLEDGE_FABRIC=PASSED'
+              ;;
+            # The readiness/routing package may update the canonical HelpAssistant,
+            # but it remains migration- and deployment-free under this boundary.
+            security/celar-ai-production-readiness-*|fix/celar-ai-readiness-routing-ui-*|feature/celar-ai-private-rag-context-ux-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              UNAPPROVED_HELP="$(grep -Ev "$CENTRAL_HELP_CONVERGENCE" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The Celar AI production-hardening package changed Help-chat runtime source outside the reviewed central-router convergence boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              UNAUTHORIZED_DEPLOYMENT="$(grep -E '^(deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED" || true)"
+              if [[ -n "$UNAUTHORIZED_DEPLOYMENT" ]]; then
+                echo 'The Help-chat production-hardening validation cannot include a deployment operation:' >&2
+                printf '%s\n' "$UNAUTHORIZED_DEPLOYMENT" >&2
+                exit 1
+              fi
+              UNEXPECTED_DATABASE="$(grep -E '^database/' <<<"$CHANGED" \
+                | grep -Ev '^database/(migrations/071_ai_runtime_production_hardening\.sql|rollback/071_ai_runtime_production_hardening_rollback\.sql)$' \
+                || true)"
+              if [[ -n "$UNEXPECTED_DATABASE" ]]; then
+                echo 'Unexpected database scope in the Celar AI Help-chat production-hardening package:' >&2
+                printf '%s\n' "$UNEXPECTED_DATABASE" >&2
+                exit 1
+              fi
+              for required in \
+                'src/frontend/project-time-web/src/HelpAssistant.jsx' \
+                'src/backend/ProjectTime.Api/Ai/PulseAiSystemIntelligenceService.cs' \
+                'src/backend/ProjectTime.Api/Ai/CelarAiCapabilityRouting.cs' \
+                'src/frontend/project-time-web/scripts/validate-celar-ai-external-deidentification.mjs'; do
+                test -f "$required"
+                git cat-file -e "origin/$BASE_BRANCH:$required"
+              done
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=CELAR_PRODUCTION_HARDENING' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_CELAR_PRODUCTION_HARDENING=PASSED'
+              ;;
+            feature/celar-ai-flowhive-production-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              FLOWHIVE_HELP_BOUNDARY='^(src/frontend/project-time-web/(scripts/validate-pulse-ai-help-chat-usability\.mjs|src/(HelpAssistant\.jsx|pulse-ai-help-chat-usability\.js))|src/backend/ProjectTime\.Api/Ai/(PulseAiProductKnowledgeCatalog|PulseAiQuestionPlanner)\.cs)$'
+              UNAPPROVED_HELP="$(grep -Ev "$FLOWHIVE_HELP_BOUNDARY" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The FlowHive production package changed Help-chat runtime source outside the reviewed product-knowledge and validation boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              UNEXPECTED_DATABASE="$(grep -E '^database/' <<<"$CHANGED" \
+                | grep -Ev '^database/(migrations/074_module_066_project_flowhive_production\.sql|rollback/074_module_066_project_flowhive_production_rollback\.sql)$' \
+                || true)"
+              if [[ -n "$UNEXPECTED_DATABASE" ]]; then
+                echo 'Unexpected database scope in the FlowHive production package:' >&2
+                printf '%s\n' "$UNEXPECTED_DATABASE" >&2
+                exit 1
+              fi
+              if grep -E '^(deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED"; then
+                echo 'The FlowHive Help-chat validation cannot include a deployment operation.' >&2
+                exit 1
+              fi
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=FLOWHIVE_PRODUCTION' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_FLOWHIVE_PRODUCTION=PASSED'
+              ;;
+            fix/systemwide-enterprise-reliability-final-*)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              UNAPPROVED_HELP="$(grep -Ev "$CENTRAL_HELP_CONVERGENCE" <<<"$DIRECT_HELP_CHANGES" || true)"
+              if [[ -n "$UNAPPROVED_HELP" ]]; then
+                echo 'The systemwide reliability package changed Help-chat runtime source outside the reviewed HelpAssistant convergence boundary:' >&2
+                printf '%s\n' "$UNAPPROVED_HELP" >&2
+                exit 1
+              fi
+              test -f src/frontend/project-time-web/src/HelpAssistant.jsx
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=SYSTEMWIDE_RELIABILITY' >> "$GITHUB_ENV"
+              echo 'PULSE_AI_HELP_CHAT_SYSTEMWIDE_RELIABILITY=PASSED'
+              ;;
+            *)
+              DIRECT_HELP_CHANGES="$(grep -E "$HELP_RUNTIME_OWNED" <<<"$CHANGED" || true)"
+              if [[ -n "$DIRECT_HELP_CHANGES" ]]; then
+                echo 'Pulse AI Help-chat runtime source may only be changed from the isolated Help-chat branch family:' >&2
+                printf '%s\n' "$DIRECT_HELP_CHANGES" >&2
+                exit 1
+              fi
+              echo 'PULSE_AI_HELP_CHAT_VALIDATION_MODE=REGRESSION' >> "$GITHUB_ENV"
+              echo "PULSE_AI_HELP_CHAT_REGRESSION_MODE=PASS branch=$HEAD_BRANCH"
+              ;;
+          esac
+
+          grep -Fq 'GROUP_5_VALIDATION_MODE=REGRESSION' .github/workflows/group5-financial-operations-recovery-ci.yml
+          grep -Fq 'GROUP5_RUNTIME_OWNED' .github/workflows/group5-financial-operations-recovery-ci.yml
+          git diff --check "origin/$BASE_BRANCH"...HEAD
+          echo 'GROUP_5_REGRESSION_APPLICABILITY_CORRECTION=PASSED'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Validate source contract
+        working-directory: src/frontend/project-time-web
+        run: |
+          node --check ./scripts/validate-pulse-ai-help-chat-usability.mjs
+          node --check ./src/pulse-ai-help-chat-usability.js
+          node ./scripts/validate-pulse-ai-help-chat-usability.mjs
+
+      - name: Build ProjectTime API
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release
+          GENERATED="$(find src/backend/ProjectTime.Api -maxdepth 8 -name PulseAiQuestionPlanner.g.cs -print -quit)"
+          test -n "$GENERATED"
+          grep -Fq 'PulseAiProductKnowledgeCatalog.Find(normalized) ?? FindKnowledgeAnswer(normalized)' "$GENERATED"
+          echo "PULSE_AI_HELP_CHAT_GENERATED_PLANNER=$GENERATED"
+          echo 'PULSE_AI_HELP_CHAT_API_BUILD=PASSED'
+
+      - name: Build complete frontend production bundle
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          cat dist/assets/*.js > /tmp/pulse-ai-help-chat.js
+          cat dist/assets/*.css > /tmp/pulse-ai-help-chat.css
+          grep -Fq 'pulse-ai-help-chat-usability-v1' /tmp/pulse-ai-help-chat.js
+          grep -Fq 'Enter sends' /tmp/pulse-ai-help-chat.js
+          grep -Fq 'Shift+Enter adds a line' /tmp/pulse-ai-help-chat.js
+          grep -Fq '.pulse-ai-help-keyboard-hint' /tmp/pulse-ai-help-chat.css
+          grep -Fq 'overscroll-behavior:contain' /tmp/pulse-ai-help-chat.css
+
+          git -C ../../.. diff --check
+          git -C ../../.. add -A
+          trap 'git -C ../../.. reset --mixed >/dev/null 2>&1 || true' EXIT
+          npm run prebuild
+          git -C ../../.. diff --check
+          git -C ../../.. diff --exit-code
+          git -C ../../.. reset --mixed
+          trap - EXIT
+
+          echo 'PULSE_AI_HELP_CHAT_GENERATED_SOURCE_CONVERGENCE=PASSED'
+          echo 'PULSE_AI_HELP_CHAT_FRONTEND_BUILD=PASSED'
+
+      - name: Validate web container build context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker build \
+            --file deployment/containers/web/Dockerfile \
+            --tag "projectpulse-help-chat:${GITHUB_SHA}" \
+            .
+          echo 'PULSE_AI_HELP_CHAT_WEB_CONTAINER_BUILD=PASSED'
+
+      - name: Publish validation summary
+        shell: bash
+        run: |
+          {
+            echo '## Pulse AI / Celar AI Help Chat Usability'
+            echo
+            echo '- Conversation scrolling: restored'
+            echo '- Enter submits: enabled'
+            echo '- Shift+Enter newline: preserved'
+            echo '- Escape closes: enabled'
+            echo '- Direct product-purpose answer: enabled'
+            echo "- Validation mode: ${PULSE_AI_HELP_CHAT_VALIDATION_MODE:-UNKNOWN}"
+            echo '- Group 5 unrelated-PR regression mode: confirmed'
+            echo '- API build: passed'
+            echo '- Complete frontend build: passed'
+            echo '- Deterministic generated-source convergence: passed'
+            echo '- Web container build: passed'
+            echo '- Provider call added: none'
+            echo '- Deployment performed: none'
+          } >> "$GITHUB_STEP_SUMMARY"

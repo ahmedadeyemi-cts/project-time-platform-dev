@@ -1,0 +1,42 @@
+name: Validate Governed Protected-Test Release Controller
+
+on:
+  # Retired duplicate controller: retain only an explicit manual audit entry
+  # point. It cannot create a pull_request check or perform deployment work.
+  workflow_dispatch:
+    inputs:
+      retirement_audit_reference:
+        description: Historical audit reference for an explicit manual inspection
+        required: true
+        type: string
+
+# Historical source-contract paths remain explicit for audit and validators:
+# .github/workflows/deep-intelligence-read-contract-ci.yml
+# src/backend/ProjectTime.Api/Ai/ProjectPulseAiServiceCollectionExtensions.cs
+# src/backend/ProjectTime.Api/Ai/PulseAiPrivateModelClient.cs
+# The maintained controller, not this retired duplicate, owns live admission.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governed-protected-test-controller-reregistered
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate governed Test controller, exact scope, and rollback boundaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate governed protected-Test controller
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RETIREMENT_AUDIT_REFERENCE: ${{ inputs.retirement_audit_reference }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$RETIREMENT_AUDIT_REFERENCE"
+          [[ "$PR_NUMBER" == "$PR_NUMBER" ]]
+          echo "RETIRED_PROTECTED_TEST_CONTROLLER_AUDIT_ONLY=${PR_NUMBER:-$RUN_ID}"

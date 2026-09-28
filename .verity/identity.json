@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "name": "Project Time Platform Dev",
+  "slug": "project-time-platform-dev",
+  "owner": "ahmedadeyemi-cts",
+  "image_prefix": "ghcr.io/ahmedadeyemi-cts/project-time-platform-dev",
+  "locked_at": "2026-09-28T17:03:30.507Z"
+}

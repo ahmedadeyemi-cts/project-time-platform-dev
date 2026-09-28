@@ -1,0 +1,160 @@
+namespace ProjectTime.Api.Ai;
+
+public static class ProjectPulseAiProviders
+{
+    public const string DeepSeek = "deepseek_v4";
+    public const string Claude = "claude";
+    public const string OpenAi = "openai";
+    public const string Gemini = "gemini";
+    public const string Copilot = "copilot_studio";
+    public const string Local = "local_template";
+
+    public static readonly string[] Remote = [DeepSeek, Claude, OpenAi, Gemini, Copilot];
+}
+
+public static class ProjectPulseAiFeatures
+{
+    public const string TimesheetDescription = "timesheet_description";
+    public const string SowGsdPlanning = "sow_gsd_planning";
+    public const string HelpAssistant = "help_assistant";
+    public const string CloseoutCommunication = "closeout_communication";
+    public const string ProjectFlowHivePlan = "project_flowhive_plan";
+    public const string ProjectForgePlanEstimate = "project_forge_plan_estimate";
+
+    public static readonly string[] All =
+    [
+        TimesheetDescription,
+        SowGsdPlanning,
+        HelpAssistant,
+        CloseoutCommunication,
+        ProjectFlowHivePlan,
+        ProjectForgePlanEstimate
+    ];
+}
+
+public static class ProjectPulseAiOutcomes
+{
+    public const string Success = "success";
+    public const string Refusal = "refusal";
+    public const string Unavailable = "unavailable";
+    public const string Failure = "failure";
+}
+
+public sealed record ProjectPulseAiGenerationRequest(
+    string Feature,
+    string SystemPrompt,
+    string UserPrompt,
+    int MaxOutputTokens,
+    double Temperature)
+{
+    // Internal capability: public request JSON cannot opt into larger budgets.
+    internal bool StructuredSowPhase { get; init; }
+    internal bool BoundedPrivatePhase { get; init; }
+    internal string? SowPhase { get; init; }
+}
+
+public sealed record ProjectPulseAiUsage(
+    long? InputTokens,
+    long? OutputTokens,
+    long? TotalTokens,
+    long? ReasoningTokens = null);
+
+public sealed record ProjectPulseAiRateLimits(
+    string? RequestsRemaining,
+    string? TokensRemaining,
+    string? RequestsReset,
+    string? TokensReset);
+
+public sealed record ProjectPulseAiProviderResult(
+    string Provider,
+    string Outcome,
+    string? Content,
+    string? Code,
+    string? Message,
+    string? RequestId,
+    ProjectPulseAiUsage? Usage,
+    int? HttpStatusCode,
+    ProjectPulseAiRateLimits? RateLimits = null)
+{
+    public Module025ProviderDiagnostics? SowDiagnostics { get; init; }
+    public DateTimeOffset? RetryAfterUtc { get; init; }
+
+    public bool IsSuccess =>
+        string.Equals(Outcome, ProjectPulseAiOutcomes.Success, StringComparison.Ordinal);
+
+    public bool IsRefusal =>
+        string.Equals(Outcome, ProjectPulseAiOutcomes.Refusal, StringComparison.Ordinal);
+}
+
+public sealed record ProjectPulseAiRouteResult(
+    string Content,
+    string Provider,
+    string Outcome,
+    string? Warning,
+    IReadOnlyList<string> AttemptedProviders,
+    IReadOnlyList<string> SkippedProviders,
+    ProjectPulseAiUsage? Usage,
+    string? RequestId,
+    IReadOnlyList<ProjectPulseAiTargetDecision>? TargetDecisions = null);
+
+public sealed record ProjectPulseAiTargetDecision(
+    string Target,
+    string Outcome,
+    string ReasonCode);
+
+public sealed record ProjectPulseAiProbeResult(
+    string Provider,
+    bool Available,
+    string Code,
+    string Message,
+    int? HttpStatusCode,
+    string? RequestId)
+{
+    public DateTimeOffset? RetryAfterUtc { get; init; }
+    public ProjectPulseAiRateLimits? RateLimits { get; init; }
+    internal string? CredentialFingerprint { get; init; }
+}
+
+public sealed record ProjectPulseAiProviderHealthSnapshot(
+    string Provider,
+    bool Enabled,
+    bool Configured,
+    string Status,
+    string LastOutcome,
+    DateTimeOffset? LastCheckedAt,
+    DateTimeOffset? LastSuccessAt,
+    DateTimeOffset? LastFailureAt,
+    string? LastFailureCode,
+    DateTimeOffset? CircuitOpenUntil,
+    long SuccessCount,
+    long FailureCount,
+    long RefusalCount,
+    long? InputTokens,
+    long? OutputTokens,
+    string? LastRequestId,
+    ProjectPulseAiRateLimits? RateLimits,
+    string ProbeStatus,
+    DateTimeOffset? LastProbeAt,
+    DateTimeOffset? LastProbeSuccessAt,
+    DateTimeOffset? LastProbeFailureAt,
+    string? LastProbeFailureCode,
+    long ProbeSuccessCount,
+    long ProbeFailureCount,
+    string? LastProbeRequestId)
+{
+    public DateTimeOffset? RetryAfterUtc { get; init; }
+    public string? LastFailureMessage { get; init; }
+    public string? LastProbeFailureMessage { get; init; }
+}
+
+public interface IProjectPulseAiProvider
+{
+    string Code { get; }
+
+    Task<ProjectPulseAiProviderResult> GenerateAsync(
+        ProjectPulseAiGenerationRequest request,
+        CancellationToken cancellationToken);
+
+    Task<ProjectPulseAiProbeResult> ProbeAsync(
+        CancellationToken cancellationToken);
+}

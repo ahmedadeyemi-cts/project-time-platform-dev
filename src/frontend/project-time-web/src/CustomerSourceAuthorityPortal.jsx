@@ -1,0 +1,360 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { authoritativeApi } from './projectpulse-authoritative-api.js';
+
+async function requestJson(url, options = {}) {
+  return authoritativeApi(url, options);
+}
+
+function sourceLabel(source) {
+  if (!source) return 'Source unavailable';
+  if (source.mode === 'manual') return 'Manual customer directory';
+  if (source.mode === 'sell') return 'ConnectWise SELL';
+  return source.providerName || source.providerKey || 'Module 026 CRM';
+}
+
+function sourceTone(source) {
+  if (!source) return 'neutral';
+  if (source.mode === 'manual') return 'manual';
+  return source.providerReady ? 'ready' : 'attention';
+}
+
+function formatTimestamp(value) {
+  if (!value) return 'No completed customer sync';
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+export default function CustomerSourceAuthorityPortal() {
+  const requestSequence = useRef(0);
+  const [state, setState] = useState({ loading: true, source: null, providers: [], canManage: false, migrationApplied: true, error: '' });
+  const [draftMode, setDraftMode] = useState('sell');
+  const [draftProviderKey, setDraftProviderKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [actionMessage, setActionMessage] = useState('');
+  const [search, setSearch] = useState('');
+  const [preview, setPreview] = useState([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [importLoading, setImportLoading] = useState(false);
+
+  const loadSource = async () => {
+    const requestId = ++requestSequence.current;
+    try {
+      const payload = await requestJson('/api/customers/source');
+      if (requestId !== requestSequence.current) return;
+      const source = payload?.source || null;
+      setState({
+        loading: false,
+        source,
+        providers: Array.isArray(payload?.providers) ? payload.providers : [],
+        canManage: Boolean(payload?.canManage),
+        migrationApplied: payload?.migrationApplied !== false,
+        error: ''
+      });
+      setDraftMode(source?.mode || 'sell');
+      setDraftProviderKey(source?.mode === 'crm' ? (source?.providerKey || '') : '');
+    } catch (error) {
+      if (requestId !== requestSequence.current) return;
+      setState((current) => ({
+        ...current,
+        loading: false,
+        canManage: false,
+        error: error?.message || 'Customer source authority is unavailable.'
+      }));
+    }
+  };
+
+  useEffect(() => {
+    void loadSource();
+    const reload = () => {
+      setPreview([]); setSelectedIds(new Set()); setActionMessage('');
+      setSaving(false); setPreviewLoading(false); setImportLoading(false);
+      setState({ loading: true, source: null, providers: [], canManage: false, migrationApplied: true, error: '' });
+      void loadSource();
+    };
+    window.addEventListener('projectpulse:auth-session-ready', reload);
+    window.addEventListener('projectpulse:view-as-changed', reload);
+    return () => {
+      requestSequence.current += 1;
+      window.removeEventListener('projectpulse:auth-session-ready', reload);
+      window.removeEventListener('projectpulse:view-as-changed', reload);
+    };
+  }, []);
+
+
+  useEffect(() => {
+    const mode = state.source?.mode || 'sell';
+    document.documentElement.dataset.customerSourceMode = mode;
+    document.documentElement.dataset.customerSourceProvider = state.source?.providerKey || '';
+    return () => {
+      delete document.documentElement.dataset.customerSourceMode;
+      delete document.documentElement.dataset.customerSourceProvider;
+    };
+  }, [state.source]);
+
+  const crmProviders = useMemo(
+    () => state.providers.filter((provider) => provider?.providerKey !== 'connectwise_sell' && provider?.eligibleCustomerSource),
+    [state.providers]
+  );
+
+  const selectedProvider = useMemo(
+    () => state.providers.find((provider) => provider?.providerKey === draftProviderKey) || null,
+    [state.providers, draftProviderKey]
+  );
+
+  const activeSelectionMatchesDraft =
+    state.source?.mode === draftMode
+    && (draftMode !== 'crm' || state.source?.providerKey === draftProviderKey);
+
+  const handleModeChange = (event) => {
+    const nextMode = event.target.value;
+    setDraftMode(nextMode);
+    setActionMessage('');
+    setPreview([]);
+    setSelectedIds(new Set());
+    if (nextMode === 'crm' && !draftProviderKey) {
+      setDraftProviderKey(crmProviders[0]?.providerKey || '');
+    }
+  };
+
+  const saveSource = async () => {
+    if (!state.canManage || saving) return;
+    setSaving(true);
+    const sequence = requestSequence.current;
+    setActionMessage('');
+    try {
+      const payload = await requestJson('/api/customers/source', {
+        method: 'PUT',
+        body: JSON.stringify({
+          mode: draftMode,
+          providerKey: draftMode === 'crm' ? draftProviderKey : null
+        })
+      });
+      if (sequence !== requestSequence.current) return;
+      const source = payload?.source || null;
+      setState((current) => ({ ...current, source, error: '' }));
+      setDraftMode(source?.mode || draftMode);
+      setDraftProviderKey(source?.mode === 'crm' ? (source?.providerKey || draftProviderKey) : '');
+      setPreview([]);
+      setSelectedIds(new Set());
+      setActionMessage(payload?.message || 'Customer source updated.');
+    } catch (error) {
+      if (sequence !== requestSequence.current) return;
+      setActionMessage(error?.message || 'Customer source could not be updated.');
+    } finally {
+      if (sequence === requestSequence.current) setSaving(false);
+    }
+  };
+
+  const previewCustomers = async () => {
+    if (previewLoading || !activeSelectionMatchesDraft || state.source?.mode !== 'crm') return;
+    setPreviewLoading(true);
+    const sequence = requestSequence.current;
+    setActionMessage('');
+    try {
+      const payload = await requestJson('/api/customers/source/preview', {
+        method: 'POST',
+        body: JSON.stringify({ search, page: 1, pageSize: 100 })
+      });
+      if (sequence !== requestSequence.current) return;
+      const customers = Array.isArray(payload?.customers) ? payload.customers : [];
+      setPreview(customers);
+      setSelectedIds(new Set());
+      setActionMessage(payload?.message || `${customers.length} customer(s) loaded.`);
+    } catch (error) {
+      if (sequence !== requestSequence.current) return;
+      setPreview([]);
+      setSelectedIds(new Set());
+      setActionMessage(error?.message || 'Customer preview could not be loaded.');
+    } finally {
+      if (sequence === requestSequence.current) setPreviewLoading(false);
+    }
+  };
+
+  const toggleSelected = (sourceRecordId) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(sourceRecordId)) next.delete(sourceRecordId);
+      else next.add(sourceRecordId);
+      return next;
+    });
+  };
+
+  const importCustomers = async () => {
+    if (importLoading || selectedIds.size === 0) return;
+    setImportLoading(true);
+    const sequence = requestSequence.current;
+    setActionMessage('');
+    try {
+      const payload = await requestJson('/api/customers/source/import', {
+        method: 'POST',
+        body: JSON.stringify({ sourceRecordIds: Array.from(selectedIds) })
+      });
+      if (sequence !== requestSequence.current) return;
+      setActionMessage(payload?.message || 'Selected customers were imported.');
+      setSelectedIds(new Set());
+      setPreview([]);
+      window.setTimeout(() => { if (sequence === requestSequence.current) window.location.reload(); }, 350);
+    } catch (error) {
+      if (sequence !== requestSequence.current) return;
+      setActionMessage(error?.message || 'Selected customers could not be imported.');
+    } finally {
+      if (sequence === requestSequence.current) setImportLoading(false);
+    }
+  };
+
+  const scrollToManualCustomer = () => {
+    const heading = Array.from(document.querySelectorAll('.customer-directory-center h3'))
+      .find((node) => /add customer/i.test(node.textContent || ''));
+    heading?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+
+  const source = state.source;
+  const externalCrmActive = source?.mode === 'crm';
+  const providerMappingReady = selectedProvider?.customerPreviewConfigured && selectedProvider?.customerImportConfigured;
+
+  return (
+    <aside className="customer-source-authority" aria-label="Module 021 customer source authority">
+      <header className="customer-source-authority__header">
+        <div>
+          <span className="customer-source-authority__eyebrow">MODULE 021 • SOURCE</span>
+          <strong>Customer source</strong>
+        </div>
+        <span className={`customer-source-authority__status customer-source-authority__status--${sourceTone(source)}`}>
+          {state.loading ? 'Loading' : sourceLabel(source)}
+        </span>
+      </header>
+
+      {state.error ? <div className="customer-source-authority__alert" role="alert">{state.error} <button type="button" onClick={loadSource}>Retry</button></div> : null}
+      {!state.migrationApplied ? (
+        <div className="customer-source-authority__alert">
+          Migration 098 has not been applied yet. ConnectWise SELL remains the backward-compatible source until the migration is installed.
+        </div>
+      ) : null}
+
+      <label className="customer-source-authority__field">
+        <span>Authoritative source</span>
+        <select value={draftMode} onChange={handleModeChange} disabled={!state.canManage || saving || !state.migrationApplied}>
+          <option value="sell">ConnectWise SELL</option>
+          <option value="crm">Another Module 026 CRM/ERP</option>
+          <option value="manual">Manual</option>
+        </select>
+      </label>
+
+      {draftMode === 'crm' ? (
+        <label className="customer-source-authority__field">
+          <span>Module 026 provider</span>
+          <select
+            value={draftProviderKey}
+            onChange={(event) => {
+              setDraftProviderKey(event.target.value);
+              setPreview([]);
+              setSelectedIds(new Set());
+              setActionMessage('');
+            }}
+            disabled={!state.canManage || saving || !state.migrationApplied}
+          >
+            <option value="">Select a provider</option>
+            {crmProviders.map((provider) => (
+              <option key={provider.providerKey} value={provider.providerKey}>
+                {provider.providerName}{provider.providerReady ? '' : ' • attention required'}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+
+      <button
+        type="button"
+        className="customer-source-authority__primary"
+        onClick={saveSource}
+        disabled={!state.canManage || saving || !state.migrationApplied || (draftMode === 'crm' && !draftProviderKey) || activeSelectionMatchesDraft}
+      >
+        {saving ? 'Saving…' : 'Save source'}
+      </button>
+
+      {source?.mode === 'manual' ? (
+        <div className="customer-source-authority__mode-card">
+          <strong>Manual is authoritative</strong>
+          <p>Customers are maintained directly in Module 021. ConnectWise SELL association and external CRM synchronization are not required.</p>
+          <button type="button" onClick={scrollToManualCustomer}>Add customer manually</button>
+        </div>
+      ) : null}
+
+      {externalCrmActive ? (
+        <div className="customer-source-authority__mode-card">
+          <strong>{sourceLabel(source)}</strong>
+          <p>
+            Module 026 connection: {source?.providerReady ? 'ready' : 'attention required'}.
+            {' '}Customer mapping: {source?.customerImportConfigured ? 'configured' : 'not configured'}.
+          </p>
+          <small>Last customer sync: {formatTimestamp(source?.lastSuccessfulCustomerSyncAt)}</small>
+
+          {!source?.customerImportConfigured ? (
+            <div className="customer-source-authority__alert customer-source-authority__alert--compact">
+              Configure the provider customer import mapping in Module 026 before pulling customers. The mapping needs customerListUrl, customerRecordUrlTemplate (or recordLookupUrlTemplate), itemsPath, idPath, and namePath.
+            </div>
+          ) : null}
+
+          {source?.providerReady && source?.customerImportConfigured ? (
+            <div className="customer-source-authority__pull">
+              <label className="customer-source-authority__field">
+                <span>Search CRM customers</span>
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Customer name or detail" />
+              </label>
+              <button type="button" onClick={previewCustomers} disabled={previewLoading || !activeSelectionMatchesDraft}>
+                {previewLoading ? 'Loading…' : 'Preview customers'}
+              </button>
+            </div>
+          ) : null}
+
+          {preview.length ? (
+            <div className="customer-source-authority__preview">
+              <div className="customer-source-authority__preview-head">
+                <strong>{preview.length} customer(s)</strong>
+                <button type="button" onClick={importCustomers} disabled={selectedIds.size === 0 || importLoading || !providerMappingReady}>
+                  {importLoading ? 'Importing…' : `Import selected (${selectedIds.size})`}
+                </button>
+              </div>
+              <div className="customer-source-authority__preview-list">
+                {preview.slice(0, 30).map((customer) => (
+                  <label key={customer.sourceRecordId}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(customer.sourceRecordId)}
+                      onChange={() => toggleSelected(customer.sourceRecordId)}
+                    />
+                    <span>
+                      <strong>{customer.name}</strong>
+                      <small>{customer.matchType === 'new_customer' ? 'New customer' : customer.matchType?.replaceAll('_', ' ')}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {source?.mode === 'sell' ? (
+        <p className="customer-source-authority__note">
+          ConnectWise SELL is active. Use the existing governed ConnectWise SELL preview/import controls in Module 021 below this selector.
+        </p>
+      ) : null}
+
+      {!state.canManage && !state.loading ? (
+        <p className="customer-source-authority__note">You can view the active source, but your current role cannot change it.</p>
+      ) : null}
+
+      {actionMessage ? <div className="customer-source-authority__message">{actionMessage}</div> : null}
+    </aside>
+  );
+}

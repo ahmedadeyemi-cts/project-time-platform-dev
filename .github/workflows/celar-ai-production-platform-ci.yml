@@ -1,0 +1,437 @@
+name: Validate Celar AI Production Platform
+
+on:
+  push:
+    branches:
+      - feature/celar-ai-production-platform-20260802
+  pull_request:
+    paths:
+      - '.github/workflows/celar-ai-production-platform-ci.yml'
+      - 'src/backend/ProjectTime.Api/Modules/CelarAiProductionPlatformModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/CelarAiEnterprisePlatformModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/CelarAiConversationAttachmentModule.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiConversationAttachmentContracts.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiConversationAttachmentRepository.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiConversationAttachmentService.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiConversationAttachmentRetentionWorker.cs'
+      - 'database/migrations/072_celar_ai_conversation_attachments.sql'
+      - 'database/rollback/072_celar_ai_conversation_attachments_rollback.sql'
+      - 'tests/test-celar-ai-conversation-attachments-migration-072.sh'
+      - 'database/migrations/074_module_066_project_flowhive_production.sql'
+      - 'database/rollback/074_module_066_project_flowhive_production_rollback.sql'
+      - 'tests/test-module-066-project-flowhive-migration-074.sh'
+      - 'src/frontend/project-time-web/scripts/inject-celar-ai-production-platform.mjs'
+      - 'src/frontend/project-time-web/scripts/inject-celar-ai-enterprise-chat-context.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-celar-ai-production-platform.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-celar-ai-unified-chat-attachments.mjs'
+      - 'src/frontend/project-time-web/src/CelarAiProductionPlatform.jsx'
+      - 'src/frontend/project-time-web/src/celar-ai-production-platform.css'
+      - 'docs/modules/module-011-pulse-ai/CELAR-AI-PRODUCTION-PLATFORM.md'
+      - 'docs/modules/module-066-project-flowhive/CELAR-AI-GENERATION.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: celar-ai-production-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify source boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE_BRANCH="${GITHUB_BASE_REF:-main}"
+          HEAD_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if [[ "$HEAD_BRANCH" == 'feature/deepseek-v4-dgx-primary-20260904' ]]; then
+            node tests/validate-deepseek-release-scope.mjs
+            exit 0
+          fi
+          git fetch origin "$BASE_BRANCH" --no-tags
+          BASE="$(git merge-base "origin/$BASE_BRANCH" HEAD)"
+          CHANGED="$(git diff --name-only "$BASE"...HEAD)"
+          printf '%s\n' "$CHANGED"
+          test -n "$CHANGED"
+          git diff --check "$BASE"...HEAD
+
+          UNAUTHORIZED_CONTROL="$(grep -E '^(deployment/|scripts/.*deploy|\.github/workflows/projectpulse-deploy-)' <<<"$CHANGED" || true)"
+          if [[ "$HEAD_BRANCH" == feature/celar-ai-internal-data-intelligence-* ]]; then
+            UNAUTHORIZED_CONTROL="$(grep -Fvx \
+              '.github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml' \
+              <<<"$UNAUTHORIZED_CONTROL" || true)"
+            test -f .github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml
+          elif [[ "$HEAD_BRANCH" == fix/timesheet-ai-opencloud-deferred-release-* ]]; then
+            UNAUTHORIZED_CONTROL="$(grep -Fvx \
+              -e '.github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml' \
+              -e 'deployment/environments/opencloud-template.yml' \
+              -e 'deployment/podman/README.md' \
+              -e 'deployment/podman/compose.yml' \
+              -e 'deployment/podman/private-runtime.env.example' \
+              <<<"$UNAUTHORIZED_CONTROL" || true)"
+            for required in \
+              '.github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml' \
+              'deployment/environments/opencloud-template.yml' \
+              'deployment/podman/README.md' \
+              'deployment/podman/compose.yml' \
+              'deployment/podman/private-runtime.env.example' \
+              'tests/validate-celar-ai-opencloud-deferred-runtime.mjs'; do
+              test -f "$required"
+              grep -Fxq "$required" <<<"$CHANGED"
+            done
+            grep -Fq 'workflow_dispatch:' .github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml
+            grep -Fq 'DEPLOY-CELAR-AI-OPENCLOUD-RUNTIME-TO-TEST' .github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml
+            ! grep -Eq '^[[:space:]]{2}push:' .github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml
+            grep -Fq 'status: deferred-until-opencloud' deployment/environments/opencloud-template.yml
+          elif [[ "$HEAD_BRANCH" == release/test-b1335bd2-timesheet-ai-* ]]; then
+            CONTROLLER='.github/workflows/projectpulse-deploy-test.yml'
+            CONTROLLER_VALIDATOR='.github/workflows/projectpulse-release-test-control-ci.yml'
+            PRIVATE_RUNTIME='.github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml'
+            HISTORICAL_HOTFIX='.github/workflows/projectpulse-deploy-modules-runtime-hotfix-test.yml'
+            MIGRATOR='scripts/release-test/apply-celar-ai-internal-data-080.sh'
+            DEFERRAL_TEST='tests/validate-celar-ai-opencloud-deferred-runtime.mjs'
+            UNAUTHORIZED_CONTROL="$(grep -Fvx \
+              -e "$CONTROLLER" \
+              -e "$CONTROLLER_VALIDATOR" \
+              -e "$PRIVATE_RUNTIME" \
+              -e "$HISTORICAL_HOTFIX" \
+              <<<"$UNAUTHORIZED_CONTROL" || true)"
+            for required in "$CONTROLLER" "$CONTROLLER_VALIDATOR" "$PRIVATE_RUNTIME" "$HISTORICAL_HOTFIX" "$MIGRATOR" "$DEFERRAL_TEST"; do
+              test -f "$required"
+              grep -Fxq "$required" <<<"$CHANGED"
+            done
+            grep -Fq 'b1335bd2426d061f85498ace7c7b2a70c3b5bdc6' "$CONTROLLER"
+            grep -Fq '080_celar_ai_internal_data_intelligence.sql' "$CONTROLLER"
+            grep -Fq 'currentDescription:"Working on training"' "$CONTROLLER"
+            grep -Fq 'group: projectpulse-deploy-test' "$CONTROLLER"
+            grep -Fq 'queue: max' "$CONTROLLER"
+            ! grep -Fq '081_celar_ai_private_runtime_activation' "$CONTROLLER"
+            grep -Fq 'PRIVATE_RUNTIME_MIGRATION_081=ABSENT' "$MIGRATOR"
+            for deferred in "$PRIVATE_RUNTIME" "$HISTORICAL_HOTFIX"; do
+              ! grep -Eq 'azure/[l]ogin@' "$deferred"
+              ! grep -Fq 'environment: test' "$deferred"
+              ! grep -Eq 'id-token:[[:space:]]+[w]rite' "$deferred"
+              ! grep -Eq '^[[:space:]]{2}push:' "$deferred"
+            done
+          elif [[ "$HEAD_BRANCH" == fix/systemwide-enterprise-reliability-final-* ]]; then
+            GENERATED_API_SOURCE='deployment/rocky-linux/apply-remaining-psa-module-api-patch.sh'
+            UNAUTHORIZED_CONTROL="$(grep -Fvx "$GENERATED_API_SOURCE" <<<"$UNAUTHORIZED_CONTROL" || true)"
+            test -f "$GENERATED_API_SOURCE"
+            grep -Fxq "$GENERATED_API_SOURCE" <<<"$CHANGED"
+            echo 'CELAR_AI_PRODUCTION_SYSTEMWIDE_GENERATED_SOURCE_BOUNDARY=PASSED'
+          elif grep -Fxq '.github/flowhive-enterprise-psa-release-files.txt' <<<"$CHANGED" \
+            && grep -Fxq '.github/module025-sow-sell-governed-release-files.txt' <<<"$CHANGED" \
+            && grep -Fxq 'database/migrations/103_module_066_flowhive_enterprise_psa_revamp.sql' <<<"$CHANGED" \
+            && grep -Fxq 'database/migrations/106_module025_sow_sell_register.sql' <<<"$CHANGED"; then
+            HEAD_BRANCH='release/flowhive-sow-successor-20260908'
+            echo 'CELAR_AI_PRODUCTION_COMBINED_FLOWHIVE_SOW_SCOPE=PASSED'
+          elif grep -Fxq '.github/module025-sow-sell-governed-release-files.txt' <<<"$CHANGED" \
+            && grep -Fxq 'database/migrations/106_module025_sow_sell_register.sql' <<<"$CHANGED"; then
+            HEAD_BRANCH='feat/module025-sow-sell-versioned-register-20260908'
+            echo 'CELAR_AI_PRODUCTION_MODULE025_MIGRATION_SCOPE=PASSED'
+          fi
+          if [[ "$HEAD_BRANCH" == 'release/flowhive-sow-successor-20260908' ]]; then
+            FLOWHIVE_PROXY_LIMIT='deployment/containers/web/default.conf.template'
+            grep -Fxq "$FLOWHIVE_PROXY_LIMIT" <<<"$CHANGED"
+            grep -Fxq "$FLOWHIVE_PROXY_LIMIT" .github/flowhive-enterprise-psa-release-files.txt
+            UNAUTHORIZED_CONTROL="$(grep -Fvx "$FLOWHIVE_PROXY_LIMIT" <<<"$UNAUTHORIZED_CONTROL" || true)"
+          fi
+          if [[ -n "$UNAUTHORIZED_CONTROL" ]]; then
+            echo 'Celar AI production source may not alter protected deployment controls.' >&2
+            printf '%s\n' "$UNAUTHORIZED_CONTROL" >&2
+            exit 1
+          fi
+
+          CHANGED_MIGRATIONS="$(grep -E '^database/(migrations|rollback)/' <<<"$CHANGED" || true)"
+          case "$HEAD_BRANCH" in
+            feature/flowhive-enterprise-psa-revamp-20260906)
+              node tests/flowhive-psa-scope.mjs
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=FLOWHIVE_ENTERPRISE_PSA'
+              ;;
+            release/flowhive-sow-successor-20260908)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/(103_module_066_flowhive_enterprise_psa_revamp|104_flowhive_bounded_ai_execution|105_flowhive_reviewed_regeneration|106_module025_sow_sell_register)\.sql|rollback/(103_module_066_flowhive_enterprise_psa_revamp_rollback|104_flowhive_bounded_ai_execution_rollback|105_flowhive_reviewed_regeneration_rollback)\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected migration in the combined FlowHive/SOW successor package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              node tests/flowhive-psa-scope.mjs
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=COMBINED_FLOWHIVE_SOW_SUCCESSOR'
+              ;;
+            feat/module025-sow-sell-versioned-register-20260908)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/migrations/106_module025_sow_sell_register\.sql$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected migration in the Module 025 SOW/Sell package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=MODULE025_SOW_SELL_REGISTER'
+              ;;
+            security/celar-ai-production-readiness-*)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/071_ai_runtime_production_hardening\.sql|rollback/071_ai_runtime_production_hardening_rollback\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected numbered migration in the Celar AI production-hardening source package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/071_ai_runtime_production_hardening.sql' \
+                'database/rollback/071_ai_runtime_production_hardening_rollback.sql'; do
+                test -f "$required"
+                git cat-file -e "origin/$BASE_BRANCH:$required"
+              done
+              test -f .github/workflows/celar-ai-production-hardening-ci.yml
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=PRODUCTION_HARDENING'
+              ;;
+            feature/celar-ai-unified-chat-routing-attachments-*)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/072_celar_ai_conversation_attachments\.sql|rollback/072_celar_ai_conversation_attachments_rollback\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected numbered migration in the unified Celar AI chat package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/072_celar_ai_conversation_attachments.sql' \
+                'database/rollback/072_celar_ai_conversation_attachments_rollback.sql' \
+                'tests/test-celar-ai-conversation-attachments-migration-072.sh'; do
+                grep -Fxq "$required" <<<"$CHANGED"
+              done
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=UNIFIED_CHAT_ATTACHMENTS'
+              ;;
+            feature/celar-ai-flowhive-production-*)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/074_module_066_project_flowhive_production\.sql|rollback/074_module_066_project_flowhive_production_rollback\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected numbered migration in the Project FlowHive production package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/074_module_066_project_flowhive_production.sql' \
+                'database/rollback/074_module_066_project_flowhive_production_rollback.sql' \
+                'tests/test-module-066-project-flowhive-migration-074.sh'; do
+                grep -Fxq "$required" <<<"$CHANGED"
+              done
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=FLOWHIVE_PRODUCTION'
+              ;;
+            feature/module-066-flowhive-ai-planner-*)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/079_coordinated_runtime_ai_document_rbac_repair\.sql|rollback/079_coordinated_runtime_ai_document_rbac_repair_rollback\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected numbered migration in the coordinated FlowHive planner package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/079_coordinated_runtime_ai_document_rbac_repair.sql' \
+                'database/rollback/079_coordinated_runtime_ai_document_rbac_repair_rollback.sql' \
+                'tests/test-coordinated-document-bridge-migration-079.sh'; do
+                grep -Fxq "$required" <<<"$CHANGED"
+              done
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=COORDINATED_FLOWHIVE_DOCUMENT_BRIDGE'
+              ;;
+            feature/celar-ai-internal-data-intelligence-*)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/(080_celar_ai_internal_data_intelligence|081_celar_ai_private_runtime_activation)\.sql|rollback/(080_celar_ai_internal_data_intelligence_rollback|081_celar_ai_private_runtime_activation_rollback)\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected numbered migration in the Celar AI private-runtime activation package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/080_celar_ai_internal_data_intelligence.sql' \
+                'database/migrations/081_celar_ai_private_runtime_activation.sql' \
+                'database/rollback/080_celar_ai_internal_data_intelligence_rollback.sql' \
+                'database/rollback/081_celar_ai_private_runtime_activation_rollback.sql' \
+                'tests/test-celar-ai-internal-data-migration-080.sh' \
+                'tests/test-celar-ai-private-runtime-activation-migration-081.sh' \
+                '.github/workflows/projectpulse-deploy-celar-ai-private-runtime-test.yml'; do
+                grep -Fxq "$required" <<<"$CHANGED"
+              done
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=PRIVATE_RUNTIME_INTERNAL_DATA'
+              ;;
+            fix/systemwide-enterprise-reliability-final-*)
+              UNEXPECTED_MIGRATIONS="$(grep -Ev '^database/(migrations/088_systemwide_enterprise_reliability\.sql|rollback/088_systemwide_enterprise_reliability_rollback\.sql)$' <<<"$CHANGED_MIGRATIONS" || true)"
+              if [[ -n "$UNEXPECTED_MIGRATIONS" ]]; then
+                echo 'Unexpected numbered migration in the systemwide reliability package:' >&2
+                printf '%s\n' "$UNEXPECTED_MIGRATIONS" >&2
+                exit 1
+              fi
+              for required in \
+                'database/migrations/088_systemwide_enterprise_reliability.sql' \
+                'database/rollback/088_systemwide_enterprise_reliability_rollback.sql'; do
+                test -f "$required"
+                grep -Fxq "$required" <<<"$CHANGED"
+              done
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=SYSTEMWIDE_RELIABILITY'
+              ;;
+            *)
+              if [[ -n "$CHANGED_MIGRATIONS" ]]; then
+                echo 'Celar AI production source may not alter numbered migrations outside the reviewed production-hardening branch family.' >&2
+                printf '%s\n' "$CHANGED_MIGRATIONS" >&2
+                exit 1
+              fi
+              echo 'CELAR_AI_PRODUCTION_SOURCE_MODE=STANDARD'
+              ;;
+          esac
+          echo "CELAR_AI_PRODUCTION_BASE=$BASE"
+          echo "CELAR_AI_PRODUCTION_HEAD=$(git rev-parse HEAD)"
+          echo 'CELAR_AI_PRODUCTION_SOURCE_BOUNDARY=PASSED'
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Validate JavaScript source
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ./scripts/inject-celar-ai-production-platform.mjs
+          node --check ./scripts/inject-celar-ai-enterprise-chat-context.mjs
+          node --check ./scripts/validate-celar-ai-production-platform.mjs
+          node --check ./scripts/validate-celar-ai-unified-chat-attachments.mjs
+          echo 'CELAR_AI_PRODUCTION_JAVASCRIPT_SYNTAX=PASSED'
+
+      - name: Build ProjectTime API
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release | tee celar-ai-production-api-build.log
+          grep -Fq '0 Error(s)' celar-ai-production-api-build.log
+          echo 'CELAR_AI_PRODUCTION_API_BUILD=PASSED'
+
+      - name: Validate Migration 072 attachment lifecycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tests/test-celar-ai-conversation-attachments-migration-072.sh
+          chmod +x tests/test-celar-ai-conversation-attachments-migration-072.sh
+          tests/test-celar-ai-conversation-attachments-migration-072.sh
+
+      - name: Validate Migration 074 Project FlowHive production lifecycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tests/test-module-066-project-flowhive-migration-074.sh
+          bash tests/test-module-066-project-flowhive-migration-074.sh
+
+      - name: Install frontend dependencies
+        working-directory: src/frontend/project-time-web
+        run: npm ci --no-audit --no-fund
+
+      - name: Prove production injector idempotence and validate contract
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node ./scripts/inject-celar-ai-production-platform.mjs
+          sha256sum \
+            src/WorkTaskBuilderPanel.jsx \
+            src/HelpAssistant.jsx \
+            src/ProjectFlowHiveCenter.jsx > /tmp/celar-ai-production-first.sha
+          node ./scripts/inject-celar-ai-production-platform.mjs
+          sha256sum \
+            src/WorkTaskBuilderPanel.jsx \
+            src/HelpAssistant.jsx \
+            src/ProjectFlowHiveCenter.jsx > /tmp/celar-ai-production-second.sha
+          diff -u /tmp/celar-ai-production-first.sha /tmp/celar-ai-production-second.sha
+          node ./scripts/validate-celar-ai-production-platform.mjs
+          echo 'CELAR_AI_PRODUCTION_INJECTOR_IDEMPOTENCE=PASSED'
+
+      - name: Restore canonical frontend sources before aggregate build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git checkout -- \
+            src/frontend/project-time-web/src/WorkTaskBuilderPanel.jsx \
+            src/frontend/project-time-web/src/HelpAssistant.jsx \
+            src/frontend/project-time-web/src/ProjectFlowHiveCenter.jsx
+          git diff --exit-code -- \
+            src/frontend/project-time-web/src/WorkTaskBuilderPanel.jsx \
+            src/frontend/project-time-web/src/HelpAssistant.jsx \
+            src/frontend/project-time-web/src/ProjectFlowHiveCenter.jsx
+          echo 'CELAR_AI_PRODUCTION_CANONICAL_SOURCES_RESTORED=PASSED'
+
+      - name: Build complete production frontend
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run build | tee celar-ai-production-frontend-build.log
+          test -s dist/index.html
+          cat dist/assets/*.js > /tmp/celar-ai-production.js
+          cat dist/assets/*.css > /tmp/celar-ai-production.css
+          for marker in \
+            'Celar AI production platform' \
+            'Created by Dr. Ahmed Adeyemi' \
+            '/api/celar-ai/v2/chat' \
+            '/api/celar-ai/v1/production/readiness' \
+            '/api/project-flowhive/projects/' \
+            '/ai-planner/runs' \
+            'AI Planning Workspace' \
+            'Initialize production lifecycle schema' \
+            'Verified current fact' \
+            'Knowledge & RAG' \
+            'Model Registry'; do
+            if ! grep -Fqi "$marker" /tmp/celar-ai-production.js; then
+              echo "CELAR_AI_PRODUCTION_MISSING_JS_MARKER=$marker" >&2
+              exit 1
+            fi
+          done
+          if grep -Fq '/api/project-flowhive/ai/production-generate' /tmp/celar-ai-production.js; then
+            echo 'Legacy FlowHive production-generate browser route remains in compiled bundle.' >&2
+            exit 1
+          fi
+          for marker in \
+            '.celar-production-platform' \
+            '.celar-trust-banner' \
+            '.celar-flowhive-production-result'; do
+            if ! grep -Fq "$marker" /tmp/celar-ai-production.css; then
+              echo "CELAR_AI_PRODUCTION_MISSING_CSS_MARKER=$marker" >&2
+              exit 1
+            fi
+          done
+          echo 'CELAR_AI_PRODUCTION_FRONTEND_BUILD=PASSED'
+
+      - name: Build production web container
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker build \
+            --file deployment/containers/web/Dockerfile \
+            --tag celar-ai-production-web:${{ github.run_id }}-${{ github.run_attempt }} \
+            .
+          echo 'CELAR_AI_PRODUCTION_WEB_CONTAINER=PASSED'
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Celar AI Production Platform validation'
+            echo
+            echo "- Exact head: \`${GITHUB_SHA}\`"
+            echo '- Module 011: one authoritative populated production shell'
+            echo '- Chat: intent-first v2 with deterministic utility answers and visible trust classification'
+            echo '- Attachments: private multi-file processing, owner-scoped retrieval, revocation, retention, and guarded Migration 072'
+            echo '- Project FlowHive: detailed Celar AI generation plus deterministic schedule validation'
+            echo '- Lifecycle: dataset references, private training jobs, frozen evaluations, model registry, deployment plans, and answer-quality evidence'
+            echo '- Privacy: private documents remain private; external fallback is generic and sanitized only'
+            echo '- Deployment/database mutation: none in this validation workflow'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,487 @@
+name: Validate Governed Protected-Test Release Controller
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/module-loading-assignment-propagation-ci.yml'
+      - '.github/workflows/module-management-owner-drawer-ci.yml'
+      - '.github/workflows/module025-protected-uat-control.yml'
+      - '.github/workflows/module033-project-forge-ci.yml'
+      - '.github/workflows/deep-intelligence-read-contract-ci.yml'
+      - '.github/workflows/projectpulse-deploy-test.yml'
+      - '.github/workflows/projectpulse-release-test-control-ci-reregistered.yml'
+      - '.github/workflows/projectpulse-release-test-control-ci.yml'
+      - '.github/workflows/protected-uat-celar-ai-pr782-workflow-control.yml'
+      - '.github/workflows/runtime-navigation-work-register-responsive-ci.yml'
+      - '.github/workflows/systemwide-enterprise-reliability-ci.yml'
+      - '.github/workflows/systemwide-enterprise-reliability-test-deployment.yml'
+      - 'database/migrations/040_scoped_role_policy_versions/00_schema.sql'
+      - 'database/migrations/097_project_planning_identity_safe_admission.sql'
+      - 'database/migrations/100_module001b_catalog_ownership_reconciliation.sql'
+      - 'database/rollback/097_project_planning_identity_safe_admission_rollback.sql'
+      - 'database/rollback/100_module001b_catalog_ownership_reconciliation_rollback.sql'
+      - 'deployment/containers/web/default.conf.template'
+      - 'scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh'
+      - 'scripts/release-test/prepare-protected-test-scope-manifests.sh'
+      - 'scripts/ci/validate-celar-ai-enterprise-source-boundary.sh'
+      - 'scripts/release-test/run-assigned-work-protected-test-uat.sh'
+      - 'scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh'
+      - 'scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh'
+      - 'scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh'
+      - 'scripts/wait-containerapp-ready-revision.sh'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateDocumentRuntimeRepository.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiInternalDataService.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiEnterprisePlatformContracts.cs'
+      - 'src/backend/ProjectTime.Api/Ai/CelarAiEnterprisePlatformService.cs'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagContracts.cs'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagRepository.cs'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagService.cs'
+      - 'src/backend/ProjectTime.Api/Ai/ProjectPulseAiServiceCollectionExtensions.cs'
+      - 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateModelClient.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module001AEngineerTaskCloseoutModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module001BProtectedTestUatFixtureModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module025ProtectedTestUatAccess.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module025SowGsdContracts.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module025SowGsdModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module025SowGsdDocumentExporter.cs'
+      - 'src/backend/ProjectTime.Api/Modules/ModuleCatalogOwnershipModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/ProjectFlowHiveAiPlannerOrchestrationModule.cs'
+      - 'src/backend/ProjectTime.Api/Program.cs'
+      - 'tests/ProjectTime.Api.AuthorizationTests/Program.cs'
+      - 'tests/validate-celar-ai-pr630-consolidated.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-module-loading-assignment-propagation.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-modules-directory-page.mjs'
+      - 'src/frontend/project-time-web/src/App.jsx'
+      - 'src/frontend/project-time-web/src/ModulesDirectoryPortal.jsx'
+      - 'src/frontend/project-time-web/src/background-request-role-gate.js'
+      - 'src/frontend/project-time-web/src/module-availability-bridge.js'
+      - 'src/frontend/project-time-web/src/module025/SowGsdWorkspace.jsx'
+      - 'src/frontend/project-time-web/src/ProjectFlowHiveCenter.jsx'
+      - 'src/frontend/project-time-web/src/project-flowhive-center.css'
+      - 'tests/CelarAiInternalDataTests/Program.cs'
+      - 'tests/FlowHiveDetailedPlannerTests/Program.cs'
+      - 'tests/test-module-catalog-owner-repair-migration-093.sh'
+      - 'tests/test-project-planning-identity-safe-admission-migration-097.sh'
+      - 'tests/test-pulse-ai-runtime-job-query-shape.sh'
+      - 'tests/validate-utilization-role-scoping.mjs'
+      - 'tests/validate-systemwide-image-build-controller.mjs'
+      - 'tests/validate-systemwide-enterprise-reliability.mjs'
+      - 'tests/validate-flowhive-sow-evidence-autoadmission.mjs'
+      - 'tests/validate-module-management-owner-drawer.mjs'
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governed-protected-test-controller-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate governed Test controller, exact scope, and rollback boundaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out exact proposed release controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind manual validation to the reviewed candidate manifest
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          APPROVAL='.github/flowhive-psa-protected-test-candidate.json'
+          CANDIDATE_SHA="$(jq -r '.sha' "$APPROVAL")"
+          SOURCE_BASE="$(jq -r '.sourceBase' "$APPROVAL")"
+          SOURCE_BRANCH="$(jq -r '.sourceBranch' "$APPROVAL")"
+          CANDIDATE_PR="$(jq -r '.pullRequest' "$APPROVAL")"
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Malformed approved candidate SHA.' >&2; exit 1; }
+          [[ "$SOURCE_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo 'Malformed approved candidate base SHA.' >&2; exit 1; }
+          [[ "$CANDIDATE_PR" == '1054' ]] || { echo 'Unexpected approved candidate pull request.' >&2; exit 1; }
+          [[ "$CANDIDATE_SHA" == '52fe65566669273c2f377a0367d0b404af18c48a' ]] || { echo 'Unexpected approved candidate SHA.' >&2; exit 1; }
+          [[ "$SOURCE_BRANCH" == 'fix/flowhive-planner-live-celar-compact-prompt-20260916' ]] || { echo 'Unexpected approved candidate branch.' >&2; exit 1; }
+          [[ "$CANDIDATE_SHA" == "$GITHUB_SHA" ]] || { echo 'The workflow ref is not the approved candidate.' >&2; exit 1; }
+          {
+            echo "BASE_SHA=$SOURCE_BASE"
+            echo "PR_NUMBER=$(jq -r '.pullRequest' "$APPROVAL")"
+            echo "PR_HEAD_REF=$SOURCE_BRANCH"
+            echo "GITHUB_HEAD_REF=$SOURCE_BRANCH"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '22'
+
+      - name: Validate governed protected-Test controller
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -Eeuo pipefail
+          CIT=$RUNNER_TEMP
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            BASE_SHA="$(jq -r '.sourceBase' .github/flowhive-psa-protected-test-candidate.json)"
+            PR_NUMBER="$(jq -r '.pullRequest' .github/flowhive-psa-protected-test-candidate.json)"
+            PR_HEAD_REF="$(jq -r '.sourceBranch' .github/flowhive-psa-protected-test-candidate.json)"
+          fi
+
+          CTL='.github/workflows/projectpulse-deploy-test.yml'
+          MODULE025_SUPERVISOR='.github/workflows/module025-protected-uat-control.yml'
+          FINALIZER='.github/workflows/protected-uat-celar-ai-pr782-workflow-control.yml'
+          RETIRED_CONTROLLER='.github/workflows/systemwide-enterprise-reliability-test-deployment.yml'
+          RETIRED_MODULE001B_UAT='.github/workflows/module001b-live-reallocation-protected-test-uat.yml'
+          UTIL_UAT='scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh'
+          WORK_UAT='scripts/release-test/run-assigned-work-protected-test-uat.sh'
+          MODULE025_UAT='scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh'
+          REV_WAIT='scripts/wait-containerapp-ready-revision.sh'
+          FIXTURE='src/backend/ProjectTime.Api/Modules/Module001BProtectedTestUatFixtureModule.cs'
+          MIG_BUILDER='scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh'
+          SHARED_PLANNING_MANIFEST='.github/shared-project-document-planning-governed-release-files.txt'
+          HEAD_BRANCH="${PR_HEAD_REF:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}}"
+
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'Pull-request base SHA missing.'
+          git cat-file -e "$BASE_SHA^{commit}" || fail 'Pull-request base commit missing.'
+
+          bash scripts/release-test/prepare-protected-test-scope-manifests.sh "$CIT"
+
+          git fetch --no-tags origin main
+          CURRENT_BASE_SHA="$(git merge-base origin/main HEAD)"
+          [[ "$CURRENT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'Current main merge-base missing.'
+          git diff --name-only "$CURRENT_BASE_SHA...HEAD" | LC_ALL=C sort -u > "$CIT/diff"
+          run_release_control() {
+            BASE_SHA="$CURRENT_BASE_SHA" GITHUB_HEAD_REF="$HEAD_BRANCH" node tests/flowhive-psa-release-control.mjs
+          }
+          source scripts/release-test/validate-protected-test-controller-branches.sh
+
+      - name: Validate governed protected-Test controller contracts
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -Eeuo pipefail
+          CIT="$RUNNER_TEMP"
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            BASE_SHA="$(jq -r '.sourceBase' .github/flowhive-psa-protected-test-candidate.json)"
+            PR_HEAD_REF="$(jq -r '.sourceBranch' .github/flowhive-psa-protected-test-candidate.json)"
+          fi
+
+          CTL='.github/workflows/projectpulse-deploy-test.yml'
+          MODULE025_SUPERVISOR='.github/workflows/module025-protected-uat-control.yml'
+          FINALIZER='.github/workflows/protected-uat-celar-ai-pr782-workflow-control.yml'
+          RETIRED_CONTROLLER='.github/workflows/systemwide-enterprise-reliability-test-deployment.yml'
+          RETIRED_MODULE001B_UAT='.github/workflows/module001b-live-reallocation-protected-test-uat.yml'
+          UTIL_UAT='scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh'
+          WORK_UAT='scripts/release-test/run-assigned-work-protected-test-uat.sh'
+          MODULE025_UAT='scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh'
+          REV_WAIT='scripts/wait-containerapp-ready-revision.sh'
+          FIXTURE='src/backend/ProjectTime.Api/Modules/Module001BProtectedTestUatFixtureModule.cs'
+          MIG_BUILDER='scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh'
+          SHARED_PLANNING_MANIFEST='.github/shared-project-document-planning-governed-release-files.txt'
+          HEAD_BRANCH="${PR_HEAD_REF:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}}"
+
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'The pull-request base SHA is unavailable.'
+          git cat-file -e "$BASE_SHA^{commit}" || fail 'The exact pull-request base commit is unavailable.'
+
+          test -f "$CTL" || fail 'The governed protected-Test controller is missing.'
+          test -f "$MODULE025_SUPERVISOR" || fail 'The Module 025 protected-Test supervisor is missing.'
+          test -f "$FINALIZER" || fail 'The successful Protected-Test UAT finalizer is missing.'
+          test ! -e "$RETIRED_CONTROLLER" || fail 'The unregistered duplicate protected-Test controller was not retired.'
+          test ! -e "$RETIRED_MODULE001B_UAT" || fail 'The parallel Module 001B protected-Test mutator was not retired.'
+          test -f "$UTIL_UAT" || fail 'The utilization role-scoping UAT script is missing.'
+          test -f "$WORK_UAT" || fail 'The assigned-work UAT script is missing.'
+          test -f "$MODULE025_UAT" || fail 'The Module 025 SOW/GSD UAT script is missing.'
+          test -f "$REV_WAIT" || fail 'The Module 001B revision readiness helper is missing.'
+          test -f "$FIXTURE" || fail 'The Module 001B disposable protected-Test fixture module is missing.'
+          test -f "$MIG_BUILDER" || fail 'The governed document-authority migration builder is missing.'
+          bash -n scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          bash -n "$MIG_BUILDER"
+          bash -n "$UTIL_UAT"
+          bash -n "$WORK_UAT"
+          bash -n "$MODULE025_UAT"
+          bash -n "$REV_WAIT"
+
+          grep -Fq 'name: Deploy System-wide Enterprise Reliability and Utilization to Protected Test' "$CTL"
+          grep -Fq '  workflow_dispatch:' "$CTL"
+          ! grep -Fq $'\n  push:' "$CTL"
+          grep -Fq 'if: >-' "$CTL"
+          grep -Fq "github.ref == 'refs/heads/main'" "$CTL"
+          grep -Fq "github.event_name == 'workflow_dispatch'" "$CTL"
+          grep -Fq "inputs.release_branch == 'release/flowhive-sow-successor-20260908'" "$CTL"
+          ! grep -Fq "if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'" "$CTL"
+          grep -Fq 'release_sha:' "$CTL"
+          grep -Fq 'release_branch:' "$CTL"
+          TARGET_BRANCH_MARKER='TARGET_RELEASE_BRANCH: $'
+          TARGET_BRANCH_MARKER+="{{ inputs.release_branch }}"
+          grep -Fq "$TARGET_BRANCH_MARKER" "$CTL"
+          grep -Fq 'Only the authorized FlowHive V2 candidate branch or exact merged main may use manual Protected-Test deployment.' "$CTL"
+          grep -Fq 'environment: test' "$CTL"
+          grep -Fq 'group: projectpulse-deploy-test' "$CTL"
+          grep -Fq 'queue: max' "$CTL"
+          grep -Fq 'cancel-in-progress: false' "$CTL"
+          TARGET_MARKER='TARGET_RELEASE_COMMIT: $'
+          TARGET_MARKER+="{{ inputs.release_sha }}"
+          CHECKOUT_MARKER='ref: $'
+          CHECKOUT_MARKER+="{{ github.event_name == 'workflow_dispatch' && inputs.release_sha || github.sha }}"
+          grep -Fq "$TARGET_MARKER" "$CTL"
+          grep -Fq "$CHECKOUT_MARKER" "$CTL"
+          grep -Fq 'https://phd-west-test.onenecklab.com' "$CTL"
+          grep -Fq 'PROJECTPULSE_M087_PASSWORD' "$CTL"
+          grep -Fq 'Build immutable API, web, and migration images' "$CTL"
+          grep -Fq 'Apply and verify governed migrations through Module 025 project-name migration 109 inside Test private network' "$CTL"
+          grep -Fq '109_module025_project_name' "$CTL"
+          grep -Fq 'database/migrations/093_assigned_work_canonical_visibility_repair.sql' "$CTL"
+          grep -Fq 'database/migrations/097_project_planning_identity_safe_admission.sql' "$CTL"
+          grep -Fq 'database/rollback/097_project_planning_identity_safe_admission_rollback.sql' "$CTL"
+          grep -Fq 'tests/test-project-planning-identity-safe-admission-migration-097.sh' "$CTL"
+          grep -Fq 'tests/test-pulse-ai-runtime-job-query-shape.sh' "$CTL"
+          grep -Fq 'bash tests/test-project-planning-identity-safe-admission-migration-097.sh' "$CTL"
+          grep -Fq 'bash tests/test-pulse-ai-runtime-job-query-shape.sh' "$CTL"
+          grep -Fq 'MIGRATION_093=APPLIED_AND_VERIFIED' "$CTL"
+          grep -Fq 'MIGRATION_094=APPLIED_AND_VERIFIED' scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          grep -Fq 'MIGRATION_095=APPLIED_AND_VERIFIED' scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          grep -Fq 'MIGRATION_096=APPLIED_AND_VERIFIED' scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          grep -Fq 'MIGRATION_097=APPLIED_AND_VERIFIED' scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          grep -Fq '096_project_planning_document_authority.sql' "$MIG_BUILDER"
+          grep -Fq '097_project_planning_identity_safe_admission.sql' "$MIG_BUILDER"
+          grep -Fq '098_module_management_owner_storage_reconciliation.sql' "$MIG_BUILDER"
+          grep -Fq '098_customer_directory_source_authority.sql' "$MIG_BUILDER"
+          grep -Fq '099_module025_sow_gsd_workspace.sql' "$MIG_BUILDER"
+          grep -Fq '100_module001b_catalog_ownership_reconciliation.sql' "$MIG_BUILDER"
+          grep -Fq 'MIGRATION_098_OWNER_STORAGE=APPLIED_AND_VERIFIED' "$MIG_BUILDER"
+          grep -Fq 'MIGRATION_098_CUSTOMER_SOURCE=APPLIED_AND_VERIFIED' "$MIG_BUILDER"
+          grep -Fq 'MIGRATION_099_MODULE025_SOW_GSD=APPLIED_AND_VERIFIED' "$MIG_BUILDER"
+          grep -Fq 'MIGRATION_100_MODULE001B_CATALOG=APPLIED_AND_VERIFIED' "$MIG_BUILDER"
+          grep -Fq 'migration-099.json' "$MIG_BUILDER"
+          grep -Fq 'migration-100.json' "$MIG_BUILDER"
+          grep -Fq 'src/backend/ProjectTime.Api/Modules/ProjectPlanningDocumentResolver.cs' "$CTL"
+          grep -Fq 'src/backend/ProjectTime.Api/Modules/ProjectPlanningAiOrchestrator.cs' "$CTL"
+          grep -Fq 'src/backend/ProjectTime.Api/Modules/ProjectFlowHiveAiPlannerOrchestrationModule.cs' "$CTL"
+          grep -Fq 'node tests/validate-shared-project-document-planning.mjs' "$CTL"
+          grep -Fq 'FLOWHIVE_AI_PLANNER_UAT=PASSED' "$CTL"
+          grep -Fq 'PROJECT_FORGE_AI_PLANNER_UAT=PASSED' "$CTL"
+          grep -Fq 'CELAR_AI_STABILITY_UAT=PASSED' "$CTL"
+          grep -Fq 'CELAR_AI_KEVIN_PROJECT_COUNT_UAT=PASSED' "$CTL"
+          grep -Fq 'migration094:"applied_and_verified"' "$CTL"
+          grep -Fq 'migration095:"applied_and_verified"' "$CTL"
+          grep -Fq 'migration096:"applied_and_verified"' "$CTL"
+          grep -Fq 'migration097:"applied_and_verified"' "$CTL"
+          grep -Fq 'Deploy immutable Test API image' "$CTL"
+          grep -Fq 'Deploy immutable Test web image' "$CTL"
+          grep -Fq 'Run protected-Test authenticated functional UAT' "$CTL"
+          grep -Fq 'Run protected-Test Module 025 SOW/GSD generation lifecycle UAT' "$CTL"
+          grep -Fq 'Run protected-Test assigned-work visibility UAT' "$CTL"
+          grep -Fq 'Run protected-Test utilization role-scoping UAT' "$CTL"
+          grep -Fq 'assignedWorkUat:true' "$CTL"
+          grep -Fq 'module025SowGsdUat:true' "$CTL"
+          grep -Fq 'Restore exact prior Test images after application failure' "$CTL"
+          grep -Fq 'steps.contract.outputs.old_api_image' "$CTL"
+          grep -Fq 'steps.contract.outputs.old_web_image' "$CTL"
+          grep -Fq 'steps.contract.outputs.old_source' "$CTL"
+          grep -Fq 'Production mutation: none' "$CTL"
+          grep -Fq 'Oracle/private AI runtime mutation: none' "$CTL"
+
+          grep -Fq 'PROJECTPULSE_MODULE001B_PROTECTED_TEST_UAT_ENABLED=true' "$WORK_UAT"
+          grep -Fq 'PROJECTPULSE_MODULE001B_PROTECTED_TEST_UAT_ENABLED=false' "$WORK_UAT"
+          grep -Fq 'MODULE001B_LIVE_REALLOCATION_UAT=PASS' "$WORK_UAT"
+          grep -Fq 'currentEmployeeWeekMutation:false' "$WORK_UAT"
+          grep -Fq 'productionMutation:false' "$WORK_UAT"
+          grep -Fq 'MODULE025_SOW_GSD_PROTECTED_TEST_UAT=PASS' "$MODULE025_UAT"
+          grep -Fq '.access.isSolutionArchitect == true' "$MODULE025_UAT"
+          grep -Fq '.engagement.status == "review_ready"' "$MODULE025_UAT"
+          grep -Fq '["plan","design","implement","validate","release"]' "$MODULE025_UAT"
+          grep -Fq 'module025_archived' "$MODULE025_UAT"
+          grep -Fq 'insideSalesRepresentatives' "$MODULE025_UAT"
+          grep -Fq 'minimumDetailedWorkPackages:10' "$MODULE025_UAT"
+          grep -Fq 'genericCitedScopeBoilerplateRejected:true' "$MODULE025_UAT"
+          grep -Fq 'DEPLOY MODULE025 PROTECTED UAT SHA ' "$MODULE025_SUPERVISOR"
+          grep -Fq "github.actor == 'ahmedadeyemi-cts'" "$MODULE025_SUPERVISOR"
+          grep -Fq 'git merge-base --is-ancestor "$REPAIRED_MODULE025_SHA" HEAD' "$MODULE025_SUPERVISOR"
+          grep -Fq 'actions/workflows/${DEPLOY_WORKFLOW_ID}/dispatches' "$MODULE025_SUPERVISOR"
+          grep -Fq 'MODULE025_PROTECTED_UAT_FINAL_WORKFLOW_STATE=disabled_manually' "$MODULE025_SUPERVISOR"
+          grep -Fq 'PRODUCTION_MUTATION=NONE' "$MODULE025_SUPERVISOR"
+          grep -Fq 'PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED' src/backend/ProjectTime.Api/Modules/Module025ProtectedTestUatAccess.cs
+          grep -Fq 'phd-west-test.onenecklab.com' src/backend/ProjectTime.Api/Modules/Module025ProtectedTestUatAccess.cs
+          ! grep -Eqi 'INSERT|UPDATE|DELETE|app_user_role_assignments' src/backend/ProjectTime.Api/Modules/Module025ProtectedTestUatAccess.cs
+          TARGET_MAIN_BRANCH_CONDITION="if [[ \"\$TARGET_RELEASE_BRANCH\" == 'main' ]]; then"
+          grep -Fq "$TARGET_MAIN_BRANCH_CONDITION" "$CTL"
+          RELIABILITY_RELEASE_MARKER='RELIABILITY_RELEASE_COMMIT: $'
+          RELIABILITY_RELEASE_MARKER+="{{ env.TARGET_RELEASE_COMMIT }}"
+          grep -Fq "$RELIABILITY_RELEASE_MARKER" "$CTL"
+          grep -Fq 'MODULE001B_PROTECTED_TEST_RECONCILE=false' "$REV_WAIT"
+          grep -Fq 'MODULE001B_STALE_REVISION_DEACTIVATE' "$REV_WAIT"
+          ! grep -Fq 'if [[ "$ACTIVE" == true ]]; then' "$REV_WAIT"
+          ! grep -Fq 'containerapp ingress traffic set' "$REV_WAIT"
+          ! grep -Fq -- '--revision-weight' "$REV_WAIT"
+          grep -Fq 'PROJECTPULSE_MODULE001B_PROTECTED_TEST_UAT_ENABLED' "$FIXTURE"
+          grep -Fq 'protected_test_uat_route_unavailable' "$FIXTURE"
+          ! grep -Fq 'DELETE FROM scoped_time_management_events' "$FIXTURE"
+          grep -Fq 'Scoped RBAC audit evidence is immutable' database/migrations/040_scoped_role_policy_versions/00_schema.sql
+          grep -Fq 'WHERE audit.timesheet_id = t.timesheet_id' "$FIXTURE"
+          grep -Fq 'RESTORED_RELEASE_SHA: 20c57ef8e10042decc438560d8f71c516b7f7838' "$FINALIZER"
+          grep -Fq 'RETIRED_RUN_UPDATED_AT: '\''2026-09-02T16:26:03Z'\''' "$FINALIZER"
+          grep -Fq 'DELETION_PROBE_RUN_ID: '\''33707866469'\''' "$FINALIZER"
+          grep -Fq 'DELETION_PROBE_ARTIFACT_ID: '\''9875904867'\''' "$FINALIZER"
+          grep -Fq 'DELETION_PROBE_ARTIFACT_DIGEST: sha256:e1e87b9e2d0a54a93ad98e8bb06e6b60c6c7af8ccf52dbcc86616bace4fd123c' "$FINALIZER"
+          grep -Fq 'GHOST_CLEANUP_ELIGIBLE_AFTER: '\''2026-09-16T16:26:04Z'\''' "$FINALIZER"
+          grep -Fq 'Classify exact zero-job Actions record as quarantined control-plane orphan' "$FINALIZER"
+          grep -Fq 'protected-uat-zero-job-actions-orphan-quarantine/v2' "$FINALIZER"
+          grep -Fq 'Deletion-refusal probe run identity mismatch.' "$FINALIZER"
+          grep -Fq 'Deletion-refusal probe artifact mismatch.' "$FINALIZER"
+          grep -Fq 'GH_PAGER=cat timeout 60s gh run view "$DELETION_PROBE_RUN_ID"' "$FINALIZER"
+          grep -Fq 'GitHub refused exact zero-job orphan deletion: HTTP 403' "$FINALIZER"
+          grep -Fq '"message":"Could not delete the workflow run"' "$FINALIZER"
+          grep -Fq 'Cannot cancel a workflow run that has not been queued yet. (HTTP 409)' "$FINALIZER"
+          grep -Fq 'Upload immutable zero-job ghost quarantine dossier' "$FINALIZER"
+          grep -Fq 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' "$FINALIZER"
+          grep -Fq 'retention-days: 14' "$FINALIZER"
+          grep -Fq 'Seal exact zero-job Actions orphan quarantine' "$FINALIZER"
+          grep -Fq 'quarantine_artifact_digest="${QUARANTINE_ARTIFACT_DIGEST#sha256:}"' "$FINALIZER"
+          grep -Fq '"$quarantine_artifact_digest" =~ ^[[:xdigit:]]{64}$' "$FINALIZER"
+          grep -Fq 'quarantine_artifact_digest="sha256:${quarantine_artifact_digest,,}"' "$FINALIZER"
+          ! grep -Fq -- '--request DELETE' "$FINALIZER"
+          ! grep -Fq 'actions/runs/${RETIRED_RUN_ID}/cancel' "$FINALIZER"
+          ! grep -Fq 'actions/runs/${RETIRED_RUN_ID}/force-cancel' "$FINALIZER"
+          grep -Fq 'FINALIZED_PROTECTED_UAT_GHOST_QUARANTINE=verified_non_executable_control_plane_orphan' "$FINALIZER"
+          grep -Fq '  workflow_dispatch:' "$FINALIZER"
+          grep -Fq 'group: protected-uat-pr794-merged-main-relaunch' "$FINALIZER"
+          grep -Fq '  restore_fence_watchdog:' "$FINALIZER"
+          grep -A12 -F '  restore_fence_watchdog:' "$FINALIZER" | grep -Fq 'timeout-minutes: 180'
+          grep -Fq 'Arm durable fence restoration watchdog' "$FINALIZER"
+          grep -Fq 'Restore Protected-Test fences after source finalizer terminates' "$FINALIZER"
+          grep -Fq 'actions/workflows/${finalizer_workflow_id}/dispatches' "$FINALIZER"
+          grep -Fq 'DURABLE_PROTECTED_UAT_FENCE_WATCHDOG=armed' "$FINALIZER"
+          grep -Fq 'steps.arm.outcome == '\''success'\''' "$FINALIZER"
+          grep -Fq 'actions/runs/${SOURCE_RUN_ID}/force-cancel' "$FINALIZER"
+          [[ "$(grep -Fc 'actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}' "$FINALIZER")" -ge 4 ]]
+          grep -Fq 'gh_api_retry() {' "$FINALIZER"
+          grep -Fq 'GitHub API attempt $retry/12 failed; retrying restoration-critical operation.' "$FINALIZER"
+          [[ "$(grep -Fc 'gh_api_retry "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/attempts/${SOURCE_RUN_ATTEMPT}"' "$FINALIZER")" -ge 3 ]]
+          grep -Fq 'gh_api_retry --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/enable"' "$FINALIZER"
+          grep -Fq 'Source finalizer is not terminal; watchdog refuses to reopen Protected-Test admissions.' "$FINALIZER"
+          grep -Fq 'source_authorization_timeout_minutes=10' "$FINALIZER"
+          grep -Fq 'source_finalizer_timeout_minutes=20' "$FINALIZER"
+          grep -Fq 'source_cleanup_margin_minutes=10' "$FINALIZER"
+          grep -Fq 'source_cancellation_budget_minutes=10' "$FINALIZER"
+          grep -Fq 'watchdog_wait_deadline_epoch=$((' "$FINALIZER"
+          grep -Fq 'source_cancel_deadline_epoch=$((' "$FINALIZER"
+          ! grep -Fq 'watchdog_poll_attempts=$((' "$FINALIZER"
+          grep -Fq '  authorize_ghost_retirement:' "$FINALIZER"
+          grep -Fq "for run_status in queued in_progress waiting requested pending; do" "$FINALIZER"
+          grep -Fq "The exact ghost is not the sole nonterminal Protected-Test control-plane record." "$FINALIZER"
+          grep -Fq "echo 'exact_ghost_only=true' >> \"\$GITHUB_OUTPUT\"" "$FINALIZER"
+          grep -A18 -F '  finalize:' "$FINALIZER" | grep -Fq 'group: projectpulse-deploy-test'
+          grep -A18 -F '  finalize:' "$FINALIZER" | grep -Fq 'queue: single'
+          grep -A18 -F '  finalize:' "$FINALIZER" | grep -Fq 'cancel-in-progress: false'
+          grep -Fq 'Revalidate every shared-group owner after concurrency acquisition' "$FINALIZER"
+          grep -Fq 'protected-test-workflow-metadata.json' "$FINALIZER"
+          grep -Fq 'actions/workflows/${workflow_id}/runs?per_page=100' "$FINALIZER"
+          grep -Fq 'Another shared-group Protected-Test workflow ran or remained active after the successful UAT.' "$FINALIZER"
+          grep -Fq 'FINALIZED_PROTECTED_UAT_SHARED_GROUP_POST_SUCCESS_DEPLOYMENTS=none' "$FINALIZER"
+          grep -Fq 'shared-group-runs-final.ndjson' "$FINALIZER"
+          grep -Fq 'Shared-group Protected-Test ledger changed immediately before success reporting.' "$FINALIZER"
+          grep -Fq 'restore_fenced_workflows_on_exit' "$FINALIZER"
+          RESTORE_OUTPUT_MARKER='restore_workflow_ids: $'
+          RESTORE_OUTPUT_MARKER+="{{ steps.preflight.outputs.restore_workflow_ids }}"
+          grep -Fq "$RESTORE_OUTPUT_MARKER" "$FINALIZER"
+          WATCHDOG_OUTPUT_MARKER='watchdog_run_id: $'
+          WATCHDOG_OUTPUT_MARKER+="{{ steps.preflight.outputs.watchdog_run_id }}"
+          grep -Fq "$WATCHDOG_OUTPUT_MARKER" "$FINALIZER"
+          grep -Fq 'One or more shared-group workflows escaped the preflight admission fence.' "$FINALIZER"
+          grep -Fq 'Reinventory current main and record atomic success while fenced' "$FINALIZER"
+          grep -Fq 'protected-test-workflow-metadata-final.json' "$FINALIZER"
+          grep -Fq 'Current-main shared-group owner inventory changed during finalization.' "$FINALIZER"
+          grep -Fq 'actual_main_start' "$FINALIZER"
+          grep -Fq 'actual_main_end' "$FINALIZER"
+          grep -Fq 'FINALIZED_PROTECTED_UAT_ATOMIC_FENCED_LEDGER=quiescent' "$FINALIZER"
+          ! grep -Fq 'Record atomic successful finalization before reopening admissions' "$FINALIZER"
+          ! grep -Fq 'Restore fenced shared-group workflow states' "$FINALIZER"
+          grep -Fq 'FINALIZED_PROTECTED_UAT_SHARED_GROUP_FENCES_RESTORED=' "$FINALIZER"
+          [[ "$(grep -Fc 'case "$workflow_state" in' "$FINALIZER")" -ge 5 ]]
+          [[ "$(grep -Fc 'disabled_manually)' "$FINALIZER")" -ge 4 ]]
+          grep -Fq 'Ghost identity differs from the uploaded immutable quarantine dossier.' "$FINALIZER"
+          grep -Fq 'unexpected_active_seen=false' "$FINALIZER"
+          grep -Fq 'mapfile -t active_run_ids' "$FINALIZER"
+          grep -Fq 'actions/runs/${active_run_id}/cancel' "$FINALIZER"
+          grep -Fq 'actions/runs/${active_run_id}/force-cancel' "$FINALIZER"
+          grep -Fq 'Unexpected active deployments were terminally cancelled; finalization refuses success.' "$FINALIZER"
+          grep -Fq 'FINALIZED_PROTECTED_UAT_FINAL_ACTIVE_DEPLOYMENTS=none' "$FINALIZER"
+          grep -Fq 'final_unexpected_active_count="$(jq -r --argjson retired "$RETIRED_RUN_ID"' "$FINALIZER"
+          grep -Fq '.total_count == 0 and (.jobs | length) == 0' "$FINALIZER"
+          grep -Fq '.created_at >= $created and .id != $id and .id != $retired' "$FINALIZER"
+          grep -Fq '(.run_started_at // .created_at) >= $created' "$FINALIZER"
+          grep -Fq '.id != $success and .id != $retired and ((.run_started_at // .created_at) >= $created)' "$FINALIZER"
+          grep -Fq '.id == $success and .run_attempt == 1' "$FINALIZER"
+          [[ "$(grep -Fc '.id == $retired and .run_attempt == $attempt' "$FINALIZER")" -ge 3 ]]
+          [[ "$(grep -Fc '.status != "completed" and .id != $retired' "$FINALIZER")" -ge 3 ]]
+          ! grep -Fq 'FINALIZED_PROTECTED_UAT_GHOST_CONCLUSION=cancelled' "$FINALIZER"
+          grep -Fq 'Prior pre-delete evidence artifact:' "$FINALIZER"
+          grep -Fq 'Quarantine dossier artifact:' "$FINALIZER"
+          grep -Fq 'Execution capability: none' "$FINALIZER"
+          grep -Fq 'GitHub cleanup eligible after:' "$FINALIZER"
+          grep -Fq 'Legacy candidate ref: verified restored' "$FINALIZER"
+          grep -Fq 'final_workflow_state="$(gh api' "$FINALIZER"
+          grep -Fq 'manual sealing required immediately' "$FINALIZER"
+          grep -A5 -F -- '- name: Reassert disabled Protected-Test workflow' "$FINALIZER" | grep -Fq 'set -Eeuo pipefail'
+          grep -Fq 'sealing_status="NOT VERIFIED (workflow state ${final_workflow_state:-unavailable}, unexpected active deployments ${final_unexpected_active_count:-unavailable}, quarantined jobs ${final_quarantined_jobs_count:-unavailable}); manual sealing required immediately"' "$FINALIZER"
+
+      - name: Complete governed protected-Test controller contracts
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            BASE_SHA="$(jq -r '.sourceBase' .github/flowhive-psa-protected-test-candidate.json)"
+            PR_HEAD_REF="$(jq -r '.sourceBranch' .github/flowhive-psa-protected-test-candidate.json)"
+          fi
+          CTL='.github/workflows/projectpulse-deploy-test.yml'
+          MODULE025_SUPERVISOR='.github/workflows/module025-protected-uat-control.yml'
+          UTIL_UAT='scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh'
+          WORK_UAT='scripts/release-test/run-assigned-work-protected-test-uat.sh'
+          MODULE025_UAT='scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh'
+          ! grep -Fq 'full_imae' "$CTL"
+          ! grep -Eq 'local[[:space:]]+repository="\$1".*image="\$repository:' "$CTL"
+          ! grep -Eq '^[[:space:]]*environment:[[:space:]]*production([[:space:]]|$)' "$CTL"
+          ! grep -Fq 'celarai.onenecklab.com' "$CTL"
+          ! grep -Fq 'phd-west.onenecklab.com' "$CTL"
+          ! grep -Eq 'productionMutation:true|privateRuntimeConfigurationMutation:true' "$CTL" "$UTIL_UAT" "$WORK_UAT" "$MODULE025_UAT" "$MODULE025_SUPERVISOR"
+
+          bash tests/test-project-planning-identity-safe-admission-migration-097.sh
+          bash tests/test-pulse-ai-runtime-job-query-shape.sh
+          node src/frontend/project-time-web/scripts/validate-module-loading-assignment-propagation.mjs
+          node tests/validate-utilization-role-scoping.mjs
+          node tests/validate-systemwide-image-build-controller.mjs
+          node tests/validate-systemwide-enterprise-reliability.mjs
+          node scripts/validate-deployment-concurrency-governance.mjs --repo-root "$GITHUB_WORKSPACE" --verify-repository
+          node scripts/validate-deployment-concurrency-governance.mjs --repo-root "$GITHUB_WORKSPACE" --self-test
+          python3 scripts/security/validate-repository-security-posture.py
+          git diff --check "$BASE_SHA...HEAD"
+
+          echo 'GOVERNED_PROTECTED_TEST_CONTROLLER=PASSED'
+          echo 'ASSIGNED_WORK_VISIBILITY_SOURCE=PASSED'
+          echo 'MODULE001B_LIVE_REALLOCATION_SOURCE=PASSED'
+          echo 'MODULE001B_READY_INACTIVE_RECONCILIATION=AUTHORIZED'
+          echo 'UTILIZATION_ROLE_SCOPING_SOURCE=PASSED'
+          echo 'SYSTEMWIDE_ENTERPRISE_RELIABILITY_SOURCE=PASSED'
+          echo 'SYSTEMWIDE_IMAGE_BUILD_CONTROLLER=PASSED'
+          echo 'MIGRATIONS_086_088_093_094_095_096_097_098_099=AUTHORIZED_TEST_APPLY_AND_VERIFY'
+          echo 'SHARED_PROJECT_DOCUMENT_PLANNING=AUTHORIZED_TEST_RELEASE'
+          echo 'FLOWHIVE_FORGE_CELAR_AUTHENTICATED_UAT=REQUIRED'
+          echo 'PRODUCTION_MUTATION=NONE'
+          echo 'ORACLE_RUNTIME_MUTATION=NONE'

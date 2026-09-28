@@ -1,0 +1,42 @@
+name: Validate Historical PR 552 Coordinated Runtime Contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Enter VALIDATE-PR552-HISTORICAL-CONTRACT
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr552-historical-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate the preserved PR 552 source contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact source without credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Validate historical migration and module contracts without deployment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ '${{ inputs.confirmation }}' == VALIDATE-PR552-HISTORICAL-CONTRACT ]]
+          test -f database/migrations/079_coordinated_runtime_ai_document_rbac_repair.sql
+          test -f scripts/release-test/apply-079.sh
+          bash -n scripts/release-test/apply-079.sh
+          node src/frontend/project-time-web/scripts/validate-module-001a-engineer-request-closeout.mjs
+          node src/frontend/project-time-web/scripts/validate-module-081-lab-equipment-tracker.mjs
+          node src/frontend/project-time-web/scripts/validate-module-082-project-risk-register.mjs
+          node src/frontend/project-time-web/scripts/validate-module-066-project-flowhive.mjs
+          echo 'PR552_HISTORICAL_CONTRACT=VALIDATED'
+          echo 'TEST_ENVIRONMENT_MUTATION=NONE'

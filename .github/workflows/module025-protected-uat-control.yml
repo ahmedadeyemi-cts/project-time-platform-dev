@@ -1,0 +1,538 @@
+name: Control Module 025 Protected UAT
+
+on:
+  issue_comment:
+    types: [created]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/module025-protected-uat-control.yml'
+      - '.github/workflows/projectpulse-deploy-test.yml'
+      - 'scripts/release-test/verify-module025-quarantine-controller.py'
+      - 'scripts/release-test/build-and-run-module025-retention-migration-106.sh'
+      - 'database/migrations/098_customer_directory_source_authority.sql'
+      - 'database/migrations/109_module025_project_name.sql'
+      - 'scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh'
+      - 'src/backend/ProjectTime.Api/Modules/Module025*'
+      - 'src/backend/ProjectTime.Api/Modules/ProjectFlowHive*'
+      - 'src/backend/ProjectTime.Api/Modules/ProjectPlanning*'
+      - 'scripts/release-test/wait-protected-uat-main-ci.py'
+      - 'scripts/release-test/verify-pr1151-uat-supersession.py'
+      - 'src/frontend/project-time-web/src/module025/**'
+
+run-name: >-
+  ${{ github.event_name == 'push'
+      && format('Auto deploy and verify Module 025 {0}', github.sha)
+      || format('Deploy and verify Module 025 from PR #{0}', github.event.issue.number) }}
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: module025-protected-uat-control
+  cancel-in-progress: false
+
+jobs:
+  deploy_and_verify:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       github.actor == 'ahmedadeyemi-cts' &&
+       startsWith(github.event.comment.body, 'DEPLOY MODULE025 PROTECTED UAT SHA '))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 230
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REQUEST_COMMENT: ${{ github.event.comment.body }}
+      DEPLOY_WORKFLOW_ID: '315562561'
+      DEPLOY_WORKFLOW_PATH: .github/workflows/projectpulse-deploy-test.yml
+      REPAIRED_MODULE025_SHA: f7c86b45cff09741dd022c0e80bc1e6ad7d5c80b
+      QUARANTINED_ZERO_JOB_RUN_ID: '33654881418'
+      QUARANTINED_ZERO_JOB_RUN_ID_2: '34377182662'
+      QUARANTINED_ZERO_JOB_RUN_ID_3: '34495606530'
+      QUARANTINED_ZERO_JOB_RUN_ID_4: '35364203547'
+      QUARANTINED_ZERO_JOB_RUN_ID_5: '35374125567'
+      QUARANTINED_ZERO_JOB_RUN_ID_6: '35461429670'
+      QUARANTINED_ZERO_JOB_RUN_ID_7: '35473939797'
+      QUARANTINED_ZERO_JOB_RUN_ID_8: '35524946948'
+
+    steps:
+      - name: Check out exact current main controller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Wait for exact merged-main build and security checks
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tests/test-protected-uat-main-ci.py
+          python3 tests/test-pr1151-uat-supersession.py
+          python3 scripts/release-test/wait-protected-uat-main-ci.py
+
+      - name: Authorize exact Module 025 Protected-Test release
+        id: authorize
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
+            requested_sha="$GITHUB_SHA"
+          else
+            [[ "$REQUEST_COMMENT" =~ ^DEPLOY\ MODULE025\ PROTECTED\ UAT\ SHA\ ([0-9a-f]{40})$ ]] \
+              || fail 'The Module 025 deployment command is not exact.'
+            requested_sha="${BASH_REMATCH[1]}"
+          fi
+          actual_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$requested_sha" == "$actual_main" && "$GITHUB_SHA" == "$actual_main" ]] \
+            || fail 'The requested release is not exact current main.'
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] \
+            || fail 'The Module 025 release supervisor is not executing from main.'
+          git merge-base --is-ancestor "$REPAIRED_MODULE025_SHA" HEAD \
+            || fail 'Current main does not contain the reviewed Module 025 persistence repair.'
+
+          test -f "$DEPLOY_WORKFLOW_PATH" \
+            || fail 'The governed Protected-Test deployment controller is missing.'
+          test -f scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh \
+            || fail 'The Module 025 live UAT script is missing.'
+          grep -Fq 'Run protected-Test Module 025 SOW/GSD generation lifecycle UAT' "$DEPLOY_WORKFLOW_PATH" \
+            || fail 'The governed deployment does not own the Module 025 lifecycle UAT gate.'
+          grep -Fq 'MODULE025_SOW_GSD_PROTECTED_TEST_UAT=PASS' scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh \
+            || fail 'The Module 025 live UAT success contract is missing.'
+
+          workflow_state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state')"
+          runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/runs?per_page=100")"
+          blocking_runs=()
+          quarantined_runs=()
+
+          verify_zero_job_quarantine() {
+            local run_id="$1" expected_sha="$2" expected_branch="$3" expected_created="$4"
+            local run_json jobs_json
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=all&per_page=1")"
+            jq -e \
+              --argjson id "$run_id" \
+              --argjson workflow "$DEPLOY_WORKFLOW_ID" \
+              --arg sha "$expected_sha" \
+              --arg branch "$expected_branch" \
+              --arg created "$expected_created" '
+                .id == $id
+                and .workflow_id == $workflow
+                and .run_attempt == 1
+                and .event == "workflow_dispatch"
+                and .head_sha == $sha
+                and .head_branch == $branch
+                and .created_at == $created
+                and .updated_at == $created
+                and .status == "queued"
+                and .conclusion == null
+              ' <<<"$run_json" >/dev/null || return 1
+            jq -e '.total_count == 0 and (.jobs | type == "array" and length == 0)' \
+              <<<"$jobs_json" >/dev/null || return 1
+            return 0
+          }
+
+          mapfile -t active_run_ids < <(jq -r '
+            .workflow_runs[]
+            | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending")
+            | .id
+          ' <<<"$runs_json")
+
+          for run_id in "${active_run_ids[@]}"; do
+            [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID" ]] && \
+               verify_zero_job_quarantine "$run_id" \
+                 '3d02b4cb62683b96554186f9d3a782fc1f21ca54' \
+                 'fix/shared-project-document-planning-20260819' \
+                 '2026-09-02T16:26:03Z'; then
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_2" ]] && \
+               verify_zero_job_quarantine "$run_id" \
+                 'af5fcb463384096f668345ac7cc9bd00efef0a33' \
+                 'main' \
+                 '2026-09-09T16:30:42Z'; then
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_3" ]] && \
+               verify_zero_job_quarantine "$run_id" \
+                 '9f30078c2c407d4d3576ccefd663a145be50c6c4' \
+                 'main' \
+                 '2026-09-10T15:26:05Z'; then
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            # GitHub rejects cancellation of this never-started run. Only a
+            # descendant release can quarantine it: its unchanged deployment
+            # controller rejects stale main before any Azure authentication.
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_4" && \
+                  "$requested_sha" != '669b467b932d3d029bde2c5bba03e0f63ba474f4' ]] && \
+               git merge-base --is-ancestor '669b467b932d3d029bde2c5bba03e0f63ba474f4' HEAD && \
+               verify_zero_job_quarantine "$run_id" \
+                 '669b467b932d3d029bde2c5bba03e0f63ba474f4' \
+                 'main' \
+                 '2026-09-18T15:43:56Z'; then
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            # Operator cancellation was rejected because this exact run never
+            # started. Keep recovery bound to its unchanged zero-job identity,
+            # no pending approval, and a descendant using the same deployment
+            # guard. The old main SHA cannot pass that guard before Azure login.
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_5" && \
+                  "$requested_sha" != '245b0915d895d83f1ceaed32460ad95a4a3d79be' ]] && \
+               git merge-base --is-ancestor '245b0915d895d83f1ceaed32460ad95a4a3d79be' HEAD && \
+               python3 scripts/release-test/verify-module025-quarantine-controller.py && \
+               verify_zero_job_quarantine "$run_id" \
+                 '245b0915d895d83f1ceaed32460ad95a4a3d79be' \
+                 'main' \
+                 '2026-09-18T17:24:14Z'; then
+              pending_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments")" \
+                || fail 'Cannot verify pending approvals for the exact never-started run.'
+              if jq -e 'type == "array" and length == 0' <<<"$pending_json" >/dev/null; then
+                quarantined_runs+=("$run_id")
+                continue
+              fi
+            fi
+            # Exact export-release orphan: normal cancel, force-cancel and delete
+            # were rejected. A descendant with an exact reviewed deployment controller
+            # makes this old release fail its exact-main guard before Azure login.
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_6" && \
+                  "$requested_sha" != '57c8d0264bdd828e6b3b53a8c5cb8b1b841e8f61' ]] && \
+               git merge-base --is-ancestor '57c8d0264bdd828e6b3b53a8c5cb8b1b841e8f61' HEAD && \
+               python3 scripts/release-test/verify-module025-quarantine-controller.py --base '57c8d0264bdd828e6b3b53a8c5cb8b1b841e8f61' && \
+               verify_zero_job_quarantine "$run_id" \
+                 '57c8d0264bdd828e6b3b53a8c5cb8b1b841e8f61' \
+                 'main' \
+                 '2026-09-19T18:30:44Z'; then
+              pending_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments")" \
+                || fail 'Cannot verify pending approvals for the exact export orphan.'
+              if jq -e 'type == "array" and length == 0' <<<"$pending_json" >/dev/null; then
+                quarantined_runs+=("$run_id")
+                continue
+              fi
+            fi
+            # Exact foundation-release orphan: normal cancellation was rejected. A descendant with an exact reviewed deployment controller
+            # makes this old release fail its exact-main guard before Azure login.
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_7" && \
+                  "$requested_sha" != 'c15ef12d5ce1bc54c15d8b31c87a50daa94bad17' ]] && \
+               git merge-base --is-ancestor 'c15ef12d5ce1bc54c15d8b31c87a50daa94bad17' HEAD && \
+               python3 scripts/release-test/verify-module025-quarantine-controller.py --base 'c15ef12d5ce1bc54c15d8b31c87a50daa94bad17' && \
+               verify_zero_job_quarantine "$run_id" \
+                 'c15ef12d5ce1bc54c15d8b31c87a50daa94bad17' \
+                 'main' \
+                 '2026-09-19T22:39:09Z'; then
+              pending_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments")" \
+                || fail 'Cannot verify pending approvals for the exact foundation orphan.'
+              if jq -e 'type == "array" and length == 0' <<<"$pending_json" >/dev/null; then
+                quarantined_runs+=("$run_id")
+                continue
+              fi
+            fi
+            # Exact FlowHive sequential-release orphan: normal cancellation was rejected. A descendant with an exact reviewed deployment controller
+            # makes this old release fail its exact-main guard before Azure login.
+            if [[ "$run_id" == "$QUARANTINED_ZERO_JOB_RUN_ID_8" && \
+                  "$requested_sha" != '045b66ca01baa68b2f5b3f6eb9e063c23c335981' ]] && \
+               git merge-base --is-ancestor '045b66ca01baa68b2f5b3f6eb9e063c23c335981' HEAD && \
+               python3 scripts/release-test/verify-module025-quarantine-controller.py --base '045b66ca01baa68b2f5b3f6eb9e063c23c335981' && \
+               verify_zero_job_quarantine "$run_id" \
+                 '045b66ca01baa68b2f5b3f6eb9e063c23c335981' \
+                 'main' \
+                 '2026-09-20T17:09:14Z'; then
+              pending_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments")" \
+                || fail 'Cannot verify pending approvals for the exact FlowHive sequential orphan.'
+              if jq -e 'type == "array" and length == 0' <<<"$pending_json" >/dev/null; then
+                quarantined_runs+=("$run_id")
+                continue
+              fi
+            fi
+            # PR1139_UAT_RECOVERY_BEGIN
+            if [[ "$run_id" == '35645759101' ]]; then
+              python3 scripts/release-test/recover-pr1139-uat-orphan.py \
+                || fail 'PR 1139 orphan recovery did not meet its exact safety contract.'
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            # PR1140_UAT_RECOVERY_BEGIN
+            if [[ "$run_id" == '35739149661' ]]; then
+              python3 scripts/release-test/recover-pr1140-uat-orphan.py \
+                || fail 'PR 1140 orphan recovery did not meet its exact safety contract.'
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            # MIGRATION_RETRY_RECOVERY_BEGIN
+            if [[ "$run_id" == '35761573008' ]]; then
+              python3 scripts/release-test/recover-pr1140-migration-retry-orphan.py \
+                || fail 'Migration retry orphan recovery did not meet its exact safety contract.'
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            # PR1151_UAT_SUPERSESSION_BEGIN
+            if [[ "$run_id" == '35891884845' ]]; then
+              python3 scripts/release-test/verify-pr1151-uat-supersession.py \
+                || fail 'PR 1151/1152 supersession did not meet its exact safety contract.'
+              quarantined_runs+=("$run_id")
+              continue
+            fi
+            # PR1151_UAT_SUPERSESSION_END
+            # MIGRATION_RETRY_RECOVERY_END
+            # PR1140_UAT_RECOVERY_END
+            # PR1139_UAT_RECOVERY_END
+            run_status="$(jq -r --argjson id "$run_id" '.workflow_runs[] | select(.id == $id) | .status' <<<"$runs_json")"
+            blocking_runs+=("${run_id}:${run_status}")
+          done
+
+          if (( ${#quarantined_runs[@]} > 0 )); then
+            joined_quarantined="$(IFS=,; echo "${quarantined_runs[*]}")"
+            echo "MODULE025_PROTECTED_UAT_ZERO_JOB_QUARANTINE=$joined_quarantined"
+          fi
+          if (( ${#blocking_runs[@]} > 0 )); then
+            joined_blocking_runs="$(IFS=,; echo "${blocking_runs[*]}")"
+            fail "Executable Protected-Test deployment already exists: $joined_blocking_runs"
+          fi
+
+          case "$workflow_state" in
+            disabled_manually)
+              ;;
+            active)
+              gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/disable" >/dev/null
+              [[ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state')" == 'disabled_manually' ]] \
+                || fail 'Idle active Protected-Test deployment workflow could not be resealed before authorization.'
+              echo 'MODULE025_PROTECTED_UAT_IDLE_ACTIVE_WORKFLOW_RESEALED=true'
+              ;;
+            *)
+              fail "Protected-Test deployment workflow must be active or disabled_manually; found $workflow_state."
+              ;;
+          esac
+
+          echo "release_sha=$requested_sha" >> "$GITHUB_OUTPUT"
+          echo "MODULE025_PROTECTED_UAT_RELEASE_AUTHORIZED=$requested_sha"
+          echo 'PRODUCTION_MUTATION=NONE'
+
+      - name: Dispatch exact governed Protected-Test deployment and reseal admissions
+        id: dispatch
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.authorize.outputs.release_sha }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          disable_deploy_workflow() {
+            local state
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state' 2>/dev/null || true)"
+            if [[ "$state" == 'active' ]]; then
+              gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/disable" >/dev/null
+            fi
+          }
+          seal_on_exit() {
+            local exit_code=$?
+            trap - EXIT
+            set +e
+            disable_deploy_workflow
+            final_state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state' 2>/dev/null || true)"
+            [[ "$final_state" == 'disabled_manually' ]] \
+              || echo "ERROR: Protected-Test deployment workflow did not reseal; state=$final_state" >&2
+            exit "$exit_code"
+          }
+          trap seal_on_exit EXIT
+
+          dispatch_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/enable" >/dev/null
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state')" == 'active' ]] \
+            || fail 'Protected-Test deployment workflow did not enable for the bounded dispatch.'
+
+          jq -n \
+            --arg ref 'main' \
+            --arg release_sha "$RELEASE_SHA" \
+            --arg release_branch 'main' \
+            '{ref:$ref,inputs:{
+              release_sha:$release_sha,
+              release_branch:$release_branch,
+              acceptance_scope:"full",
+              qualification_provider:"none",
+              recover_private_runtime:"false",
+              admission_controller_sha:""
+            }}' \
+            > "$RUNNER_TEMP/module025-protected-uat-dispatch.json"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/dispatches" \
+            --input "$RUNNER_TEMP/module025-protected-uat-dispatch.json" >/dev/null
+
+          deployment_run_id=''
+          deployment_run_url=''
+          for attempt in $(seq 1 90); do
+            runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/runs?event=workflow_dispatch&per_page=100")"
+            deployment_run_id="$(jq -r \
+              --arg sha "$RELEASE_SHA" \
+              --arg created "$dispatch_started_at" \
+              --argjson quarantined "$QUARANTINED_ZERO_JOB_RUN_ID" '
+                [.workflow_runs[]
+                  | select(.id != $quarantined)
+                  | select(.event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $sha)
+                  | select(.created_at >= $created)
+                ]
+                | sort_by(.created_at, .id)
+                | last
+                | .id // empty
+              ' <<<"$runs_json")"
+            if [[ "$deployment_run_id" =~ ^[0-9]+$ ]]; then
+              deployment_run_url="$(jq -r --argjson id "$deployment_run_id" '.workflow_runs[] | select(.id == $id) | .html_url' <<<"$runs_json")"
+              break
+            fi
+            sleep 2
+          done
+          [[ "$deployment_run_id" =~ ^[0-9]+$ && "$deployment_run_url" == https://github.com/* ]] \
+            || fail 'The exact dispatched Protected-Test deployment could not be located.'
+
+          # A run record alone does not prove GitHub has scheduled the workflow.
+          # Keep the existing bounded admission open until a real job is attached;
+          # every failure still reseals through the EXIT trap.
+          echo "run_id=$deployment_run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$deployment_run_url" >> "$GITHUB_OUTPUT"
+          job_attached=false
+          startup_deadline_epoch=$(( $(date +%s) + 180 ))
+          for attempt in $(seq 1 90); do
+            (( $(date +%s) < startup_deadline_epoch )) || break
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${deployment_run_id}")"
+            jq -e --arg sha "$RELEASE_SHA" --argjson id "$deployment_run_id" \
+              --argjson workflow "$DEPLOY_WORKFLOW_ID" '
+                .id == $id and .workflow_id == $workflow
+                and .event == "workflow_dispatch" and .head_branch == "main"
+                and .head_sha == $sha and .run_attempt == 1
+              ' <<<"$run_json" >/dev/null \
+              || fail 'Dispatched Protected-Test run identity changed before startup.'
+            [[ "$(jq -r '.status' <<<"$run_json")" != 'completed' ]] \
+              || fail 'Dispatched Protected-Test run ended before startup verification.'
+            jobs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${deployment_run_id}/jobs?filter=all&per_page=1")"
+            if jq -e --argjson id "$deployment_run_id" '
+              .total_count > 0 and any(.jobs[]; .run_id == $id)
+            ' <<<"$jobs_json" >/dev/null; then
+              job_attached=true
+              break
+            fi
+            sleep 2
+          done
+          [[ "$job_attached" == true ]] \
+            || fail "Protected-Test run $deployment_run_id has no attached job after the 180-second startup budget; admissions will reseal. Inspect this exact run before any retry."
+          echo "MODULE025_PROTECTED_UAT_DEPLOYMENT_JOB_ATTACHED=$deployment_run_id"
+
+          disable_deploy_workflow
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state')" == 'disabled_manually' ]] \
+            || fail 'Protected-Test deployment admissions were not resealed after dispatch.'
+          trap - EXIT
+
+          echo "run_id=$deployment_run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$deployment_run_url" >> "$GITHUB_OUTPUT"
+          echo "MODULE025_PROTECTED_UAT_DEPLOYMENT_DISPATCHED=$deployment_run_id"
+          echo 'PROTECTED_TEST_DEPLOYMENT_WORKFLOW=disabled_manually'
+
+      - name: Publish dispatched Protected-Test run
+        if: ${{ github.event_name == 'issue_comment' }}
+        shell: bash
+        env:
+          DEPLOYMENT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          DEPLOYMENT_RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+          RELEASE_SHA: ${{ steps.authorize.outputs.release_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$DEPLOYMENT_RUN_URL" == https://github.com/* ]]
+          gh pr comment '${{ github.event.issue.number }}' --repo "$GITHUB_REPOSITORY" --body "Module 025 Protected-Test deployment is now executing.
+
+          - Release SHA: \`$RELEASE_SHA\`
+          - Deployment run: $DEPLOYMENT_RUN_URL
+          - Required live gate: full authenticated FlowHive generation, assigned-work, utilization, Module 025 API generation, normal Solution Architect browser lifecycle and retained register downloads
+          - Deployment workflow admissions: \`disabled_manually\`
+          - Production mutation: none"
+
+      - name: Observe exact Protected-Test deployment to terminal status
+        id: observe
+        shell: bash
+        env:
+          DEPLOYMENT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          RELEASE_SHA: ${{ steps.authorize.outputs.release_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[0-9]+$ && "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          deadline_epoch=$(( $(date +%s) + 215 * 60 ))
+          poll=0
+          while (( $(date +%s) < deadline_epoch )); do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${DEPLOYMENT_RUN_ID}")"
+            jq -e --arg sha "$RELEASE_SHA" --argjson id "$DEPLOYMENT_RUN_ID" '
+              .id == $id
+              and .workflow_id == 315562561
+              and .event == "workflow_dispatch"
+              and .head_branch == "main"
+              and .head_sha == $sha
+            ' <<<"$run_json" >/dev/null
+            status="$(jq -r '.status' <<<"$run_json")"
+            conclusion="$(jq -r '.conclusion // empty' <<<"$run_json")"
+            if [[ "$status" == 'completed' ]]; then
+              echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+              echo "MODULE025_PROTECTED_UAT_DEPLOYMENT_TERMINAL=$conclusion run=$DEPLOYMENT_RUN_ID"
+              exit 0
+            fi
+            poll=$((poll + 1))
+            if (( poll == 1 || poll % 8 == 0 )); then
+              echo "MODULE025_PROTECTED_UAT_DEPLOYMENT_RUNNING run=$DEPLOYMENT_RUN_ID status=$status poll=$poll"
+            fi
+            sleep 15
+          done
+          echo 'conclusion=timed_out' >> "$GITHUB_OUTPUT"
+          echo "ERROR: Protected-Test deployment $DEPLOYMENT_RUN_ID exceeded the 215-minute observation budget." >&2
+          exit 1
+
+      - name: Reassert sealed Protected-Test deployment admissions
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state')"
+          if [[ "$state" == 'active' ]]; then
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}/disable" >/dev/null
+          fi
+          [[ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DEPLOY_WORKFLOW_ID}" --jq '.state')" == 'disabled_manually' ]]
+          echo 'MODULE025_PROTECTED_UAT_FINAL_WORKFLOW_STATE=disabled_manually'
+
+      - name: Publish Module 025 Protected-Test result
+        if: ${{ always() && github.event_name == 'issue_comment' }}
+        shell: bash
+        env:
+          DEPLOYMENT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          DEPLOYMENT_RUN_URL: ${{ steps.dispatch.outputs.run_url }}
+          DEPLOYMENT_CONCLUSION: ${{ steps.observe.outputs.conclusion }}
+          RELEASE_SHA: ${{ steps.authorize.outputs.release_sha }}
+        run: |
+          set -Eeuo pipefail
+          conclusion="${DEPLOYMENT_CONCLUSION:-not_dispatched}"
+          run_reference="${DEPLOYMENT_RUN_URL:-not dispatched}"
+          gh pr comment '${{ github.event.issue.number }}' --repo "$GITHUB_REPOSITORY" --body "Module 025 Protected-Test deployment reached terminal status.
+
+          - Release SHA: \`${RELEASE_SHA:-unavailable}\`
+          - Deployment run: $run_reference
+          - Conclusion: \`$conclusion\`
+          - Required live gate: full authenticated FlowHive generation, assigned-work, utilization, Module 025 API generation, normal Solution Architect browser lifecycle and retained register downloads
+          - Deployment workflow: \`disabled_manually\`
+          - Production mutation: none"
+
+      - name: Require successful Module 025 Protected-Test lifecycle
+        if: always()
+        shell: bash
+        env:
+          DEPLOYMENT_CONCLUSION: ${{ steps.observe.outputs.conclusion }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$DEPLOYMENT_CONCLUSION" == 'success' ]] || {
+            echo "ERROR: Module 025 Protected-Test deployment conclusion is ${DEPLOYMENT_CONCLUSION:-unavailable}." >&2
+            exit 1
+          }
+          echo 'MODULE025_PROTECTED_UAT_CONTROL=PASS'
+          echo 'PRODUCTION_MUTATION=NONE'

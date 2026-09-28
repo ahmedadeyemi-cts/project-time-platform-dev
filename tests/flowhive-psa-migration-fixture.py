@@ -1,0 +1,252 @@
+"""Exercise exact candidate migration payload and entrypoint in disposable PostgreSQL.
+
+The fixture refuses a database other than the CI-only identity. No Test/Production
+app credentials are used, and all rows below are synthetic.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root=Path(__file__).resolve().parents[1]
+def digest_read_tests():
+    import tempfile
+    text=(root/'scripts/release-test/build-and-run-flowhive-psa-migrations.sh').read_text()
+    expected_files = [
+        '103_module_066_flowhive_enterprise_psa_revamp.sql',
+        '104_flowhive_bounded_ai_execution.sql',
+        '105_flowhive_reviewed_regeneration.sql',
+        '106_module025_sow_sell_register.sql']
+    expected_literal = "legacy=[" + ",".join(repr(item) for item in expected_files) + "]"
+    assert expected_literal in text, 'Migration builder must bind the reviewed 103-106 approval set.'
+    assert 'MIGRATION_SCOPE="flowhive-enterprise-psa-103-${MIGRATION_SUFFIX}-test"' in text
+    assert '106_module025_sow_sell_register.sql' in text
+    function=text[text.index('resolve_migration_digest() ('):text.index('\nCONTROL_ROOT=')]
+    assert text.count('az acr build ')==1
+    assert 'DIGEST="$(resolve_migration_digest "$ACR" "$IMAGE")"' in text
+    assert text.index('DIGEST="$(resolve_migration_digest')<text.index('bash "$CONTROL_ROOT/scripts/release-test/run-migration-job.sh"')
+    assert '${IMAGE%%:*}@$DIGEST' in text
+    digest='sha256:'+'a'*64
+    cases=[('ready',1,True),('propagation',3,True),('absent',12,False),('malformed',1,False),
+           ('authorization',1,False),('slow',5,False)]
+    for scenario,expected_calls,success in cases:
+        with tempfile.TemporaryDirectory() as temp:
+            # Execute the actual function with isolated deterministic shell
+            # commands. No Azure credentials, cloud requests or wall-clock waits.
+            harness=r'''set -Eeuo pipefail
+SECONDS=0
+sleep() { SECONDS=$((SECONDS+$1)); }
+timeout() {
+  [[ "$1" == --kill-after=2s && "$2" =~ ^[0-9]+s$ ]] || exit 91
+  shift 2
+  [[ "$*" == "az acr repository show --name fixture --image image:tag --query digest -o tsv --only-show-errors" ]] || exit 92
+  count=0
+  [[ ! -f "$RUNNER_TEMP/count" ]] || count="$(cat "$RUNNER_TEMP/count")"
+  count=$((count+1)); echo "$count" > "$RUNNER_TEMP/count"
+  case "$SCENARIO" in
+    ready) echo "$EXPECTED_DIGEST" ;;
+    propagation) if ((count<3));then echo 'tag does not exist' >&2;return 3;else echo "$EXPECTED_DIGEST";fi ;;
+    absent) echo 'tag does not exist' >&2;return 3 ;;
+    malformed) echo 'tag:latest' ;;
+    authorization) echo 'AuthorizationFailed' >&2;return 3 ;;
+    slow) echo 'read timed out' >&2;return 124 ;;
+  esac
+}
+'''
+            # Simulate slow calls without mutating time in a command-substitution
+            # subshell: each parent sleep advances the read duration plus sleep.
+            if scenario=='slow':harness=harness.replace('SECONDS=$((SECONDS+$1))','SECONDS=$((SECONDS+$1+15))')
+            env={**os.environ,'RUNNER_TEMP':temp,'SCENARIO':scenario,'EXPECTED_DIGEST':digest}
+            out=subprocess.run(['bash'],input=harness+function+'\nresolve_migration_digest fixture image:tag\n',
+                text=True,capture_output=True,env=env,timeout=10)
+            assert (out.returncode==0)==success,(scenario,out.stderr)
+            assert int((Path(temp)/'count').read_text())==expected_calls,(scenario,out.stderr)
+            assert out.stdout.strip()==(digest if success else ''),(scenario,out.stdout)
+            assert list(Path(temp).glob('flowhive-acr-read-*'))==[],'Private diagnostic file was not removed.'
+    print('FLOWHIVE_PSA_DIGEST_READ_BEHAVIOR=PASS readOnly=true buildRetries=0')
+
+digest_read_tests()
+if sys.argv[1:]==['--digest-only']:
+    raise SystemExit(0)
+
+source=Path(os.environ['FLOWHIVE_CANDIDATE_ROOT']).resolve()
+assert os.environ.get('PGHOST')=='127.0.0.1'
+assert os.environ.get('PGDATABASE')=='flowhive_migrations_test'
+assert os.environ.get('PGUSER')=='flowhive'
+assert os.environ.get('GITHUB_ACTIONS')=='true'
+approval=json.loads((root/'.github/flowhive-psa-protected-test-candidate.json').read_text())
+event=json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+pr=event.get('pull_request',{})
+successor_staging=os.environ.get('FLOWHIVE_MIGRATION_STAGING')=='successor'
+module025_staging=successor_staging or any(item['file']=='106_module025_sow_sell_register.sql' for item in approval['migrations'])
+selected_sha=approval['sha']
+migration_entries=approval['migrations']
+if successor_staging:
+    assert pr.get('head',{}).get('ref')=='release/flowhive-sow-successor-20260908'
+    assert os.environ.get('GITHUB_EVENT_NAME')=='pull_request'
+    assert pr['number']==887
+    assert pr['head']['repo']['full_name']=='ahmedadeyemi-cts/project-time-platform'
+    assert pr['head']['sha']==subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+    assert approval['environment']=='test' and approval['sha'] != pr['head']['sha']
+    assert subprocess.run(['git','-C',str(root),'merge-base','--is-ancestor',approval['sourceBase'],pr['head']['sha']]).returncode==0
+    expected_files=[item['file'] for item in approval['migrations']]
+    assert expected_files==[
+        '103_module_066_flowhive_enterprise_psa_revamp.sql',
+        '104_flowhive_bounded_ai_execution.sql',
+        '105_flowhive_reviewed_regeneration.sql',
+        '106_module025_sow_sell_register.sql']
+    for item in approval['migrations']:
+        assert hashlib.sha256((source/'database/migrations'/item['file']).read_bytes()).hexdigest()==item['sha256']
+    assert any(item['file']=='106_module025_sow_sell_register.sql' for item in approval['migrations'])
+    successor_file='106_module025_sow_sell_register.sql'
+    successor_bytes=(source/'database/migrations'/successor_file).read_bytes()
+    successor_hash=hashlib.sha256(successor_bytes).hexdigest()
+    approved_successor=next((item for item in approval['migrations'] if item['file']==successor_file),None)
+    assert approved_successor is not None and approved_successor['sha256']==successor_hash
+    migration_entries=approval['migrations']
+    selected_sha=pr['head']['sha']
+elif pr.get('head',{}).get('ref') in {
+    'feature/flowhive-enterprise-psa-revamp-20260906',
+    'fix/flowhive-planner-provider-budget-20260912',
+}:
+    assert os.environ.get('GITHUB_EVENT_NAME')=='pull_request'
+    assert pr['number']==(937 if pr['head']['ref']=='fix/flowhive-planner-provider-budget-20260912' else 872)
+    assert pr['head']['repo']['full_name']=='ahmedadeyemi-cts/project-time-platform'
+    selected_sha=pr['head']['sha']
+assert subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()==selected_sha
+
+
+def sql(text,success=True):
+    result=subprocess.run(['psql','-X','-At','-v','ON_ERROR_STOP=1'],input=text,text=True,capture_output=True)
+    assert (result.returncode==0)==success, 'Migration behavior disagreed with expected transaction outcome.'
+    return result.stdout.strip()
+
+
+def block(file,start,end='\n);'):
+    text=(source/file).read_text(); a=text.index(start); b=text.index(end,a)
+    return text[a:b+len(end)]
+
+sql('''CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE schema_migrations(migration_id TEXT PRIMARY KEY,description TEXT,applied_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE projects(project_id UUID PRIMARY KEY);
+CREATE TABLE app_users(user_id UUID PRIMARY KEY);
+CREATE TABLE app_roles(
+    app_role_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role_code TEXT NOT NULL UNIQUE,
+    role_name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE);
+CREATE TABLE app_permissions(
+    app_permission_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    permission_code TEXT NOT NULL UNIQUE,
+    permission_name TEXT,
+    module_code TEXT,
+    permission_description TEXT);
+CREATE TABLE app_role_permissions(
+    app_role_permission_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    app_role_id UUID NOT NULL REFERENCES app_roles(app_role_id),
+    app_permission_id UUID NOT NULL REFERENCES app_permissions(app_permission_id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(app_role_id,app_permission_id));
+CREATE TABLE project_flowhive_plans(plan_id UUID PRIMARY KEY);
+CREATE TABLE project_notification_dispatches(project_notification_dispatch_id UUID PRIMARY KEY);
+CREATE TABLE project_flowhive_customer_shares(share_id UUID PRIMARY KEY);
+CREATE TABLE project_flowhive_raid_items(raid_item_id UUID PRIMARY KEY,project_id UUID NOT NULL REFERENCES projects,
+    updated_by_user_id UUID NOT NULL REFERENCES app_users,title TEXT,status TEXT);
+INSERT INTO schema_migrations(migration_id) VALUES('086_module_066_flowhive_enterprise_pm');
+INSERT INTO projects VALUES('11111111-1111-4111-8111-111111111111');
+INSERT INTO app_users VALUES('22222222-2222-4222-8222-222222222222');
+INSERT INTO app_roles(role_code,role_name) VALUES
+    ('SUPER_ADMINISTRATOR','Super Administrator'),
+    ('SYSTEM_ADMINISTRATOR','System Administrator'),
+    ('ADMINISTRATOR','Administrator'),
+    ('PROJECT_MANAGER','Project Manager'),
+    ('PROJECT_MANAGEMENT','Project Management'),
+    ('PROJECT_MANAGEMENT_LEAD','Project Management Lead'),
+    ('PROJECT_MANAGEMENT_TEAM_LEAD','Project Management Team Lead'),
+    ('PM_TEAM_LEAD','PM Team Lead');
+INSERT INTO app_permissions(permission_code,permission_name,module_code,permission_description) VALUES
+    ('MANAGE_FLOWHIVE_MEETINGS_066','Manage FlowHive meetings','066','Synthetic fixture permission'),
+    ('MANAGE_FLOWHIVE_TASK_REMINDERS_066','Manage FlowHive task reminders','066','Synthetic fixture permission');''')
+if module025_staging:
+    # Model the already-reviewed Module 025 workspace migration so the exact
+    # 106 entrypoint is exercised against its real dependency boundary.
+    sql('''CREATE TABLE module025_sow_gsd_engagements(
+        engagement_id UUID PRIMARY KEY, owner_user_id UUID NOT NULL REFERENCES app_users(user_id),
+        engagement_number TEXT NOT NULL, customer_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'draft',
+        is_active BOOLEAN NOT NULL DEFAULT TRUE, revision INTEGER NOT NULL DEFAULT 1,
+        sow_sections JSONB NOT NULL DEFAULT '{}', ai_metadata JSONB NOT NULL DEFAULT '{}');
+    CREATE TABLE module025_sow_gsd_phases(
+        engagement_id UUID NOT NULL REFERENCES module025_sow_gsd_engagements(engagement_id),
+        phase_code TEXT NOT NULL, sort_order SMALLINT NOT NULL, objective TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY(engagement_id, phase_code));
+    CREATE TABLE module025_sow_gsd_events(
+        event_id BIGSERIAL PRIMARY KEY, engagement_id UUID NOT NULL REFERENCES module025_sow_gsd_engagements(engagement_id),
+        event_type TEXT NOT NULL, actor_user_id UUID NOT NULL REFERENCES app_users(user_id),
+        engagement_revision INTEGER NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());''')
+sql(block('database/migrations/086_module_066_flowhive_enterprise_pm.sql','CREATE TABLE IF NOT EXISTS project_flowhive_working_copies ('))
+sql(block('database/migrations/095_project_planning_collaboration_access.sql','CREATE TABLE IF NOT EXISTS project_flowhive_ai_planner_runs ('))
+sql('''INSERT INTO project_flowhive_ai_planner_runs(run_id,project_id,status,phase,requested_plan,actual_actor_user_id,effective_actor_user_id)
+ VALUES('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111','generating','old-contract','{}',
+ '22222222-2222-4222-8222-222222222222','22222222-2222-4222-8222-222222222222');''')
+# This fixed directory is the image entrypoint's real layout, prepared by CI only.
+payload=Path('/opt/projectpulse/release')
+assert payload.is_dir()
+(payload/'database/migrations').mkdir(parents=True,exist_ok=True)
+checks=[]
+for item in migration_entries:
+    rel='database/migrations/'+item['file']; data=(source/rel).read_bytes()
+    assert hashlib.sha256(data).hexdigest()==item['sha256']
+    (payload/rel).write_bytes(data);checks.append(item['sha256']+'  '+rel)
+entry=(root/'scripts/release-test/apply-flowhive-psa-migrations.sh').read_bytes()
+(payload/'entrypoint.sh').write_bytes(entry)
+checks.append(hashlib.sha256(entry).hexdigest()+'  entrypoint.sh')
+(payload/'SHA256SUMS').write_text('\n'.join(checks)+'\n')
+(payload/'release-commit').write_text(selected_sha+'\n')
+env={**os.environ,'MAIN_RELEASE_EXPECTED_RELEASE_COMMIT':selected_sha,'MAIN_RELEASE_MIGRATION_MODE':'apply',
+     'PROJECTPULSE_TEST_DATABASE_NAME':'flowhive_migrations_test'}
+for attempt in range(2):
+    subprocess.run(['bash',str(payload/'entrypoint.sh')],env=env,check=True)
+assert sql("SELECT phase FROM project_flowhive_ai_planner_runs WHERE run_id='33333333-3333-4333-8333-333333333333'")=='execution_upgrade_required'
+assert sql("SELECT count(*) FROM project_flowhive_ai_plan_reviews")=='0'
+sql('''INSERT INTO project_flowhive_ai_plan_reviews(
+    run_id,project_id,actor_user_id,expected_row_version,applied_row_version,applied_revision,
+    preview_fingerprint,prior_plan,candidate_plan,applied_plan,decisions,review_note)
+VALUES('33333333-3333-4333-8333-333333333333','11111111-1111-4111-8111-111111111111',
+       '22222222-2222-4222-8222-222222222222',NULL,'66666666-6666-4666-8666-666666666666',1,
+       repeat('a',64),'{}','{}','{}','[]','Synthetic immutable review receipt');''')
+assert sql("SELECT count(*) FROM project_flowhive_ai_plan_reviews")=='1'
+for text in ["UPDATE project_flowhive_ai_plan_reviews SET review_note='changed'",
+             'DELETE FROM project_flowhive_ai_plan_reviews']:
+    sql(text,success=False)
+sql((source/'database/rollback/105_flowhive_reviewed_regeneration_rollback.sql').read_text(),success=False)
+# Exact execution-image guards fail closed without modifying the database.
+for field,value in [('MAIN_RELEASE_EXPECTED_RELEASE_COMMIT','0'*40),('PGDATABASE','not_the_test_database'),('MAIN_RELEASE_MIGRATION_MODE','rollback')]:
+    result=subprocess.run(['bash',str(payload/'entrypoint.sh')],env={**env,field:value},capture_output=True)
+    assert result.returncode!=0
+sql('''INSERT INTO project_flowhive_raid_items VALUES('44444444-4444-4444-8444-444444444444',
+'11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','Synthetic RAID item','open');
+UPDATE project_flowhive_raid_items SET status='resolved';
+DELETE FROM project_flowhive_raid_items;''')
+assert sql("SELECT string_agg(action_code,',' ORDER BY occurred_at) FROM project_flowhive_raid_events")=='created,updated,deleted'
+for text in ["UPDATE project_flowhive_raid_events SET action_code='created'",'DELETE FROM project_flowhive_raid_events']:
+    sql(text,success=False)
+assert sql('SELECT count(*) FROM project_flowhive_raid_events')=='3'
+sql((source/'database/rollback/103_module_066_flowhive_enterprise_psa_revamp_rollback.sql').read_text(),success=False)
+assert sql('SELECT count(*) FROM project_flowhive_raid_events')=='3'
+sql('''INSERT INTO project_flowhive_ai_planner_runs(run_id,project_id,status,phase,requested_plan,actual_actor_user_id,effective_actor_user_id,
+execution_contract,deadline_at) VALUES('55555555-5555-4555-8555-555555555555','11111111-1111-4111-8111-111111111111','queued','queued','{}',
+'22222222-2222-4222-8222-222222222222','22222222-2222-4222-8222-222222222222','flowhive-bounded-execution-v1-20260906',NOW()+INTERVAL '5 minutes');''')
+for text in ["UPDATE project_flowhive_ai_planner_runs SET deadline_at=deadline_at+INTERVAL '1 hour' WHERE execution_contract<>''",
+             "UPDATE project_flowhive_ai_planner_runs SET attempt_count=3 WHERE execution_contract<>''"]:
+    sql(text,success=False)
+sql((source/'database/rollback/104_flowhive_bounded_ai_execution_rollback.sql').read_text(),success=False)
+subprocess.run(['bash',str(payload/'entrypoint.sh')],env={**env,'MAIN_RELEASE_MIGRATION_MODE':'verify'},check=True)
+# Prove disabled execution fence and altered migration bytes are detected before acceptance.
+sql('ALTER TABLE project_flowhive_ai_planner_runs DISABLE TRIGGER trg_flowhive_104_execution_fence;')
+assert subprocess.run(['bash',str(payload/'entrypoint.sh')],env={**env,'MAIN_RELEASE_MIGRATION_MODE':'verify'},capture_output=True).returncode!=0
+sql('ALTER TABLE project_flowhive_ai_planner_runs ENABLE TRIGGER trg_flowhive_104_execution_fence;')
+(payload/'database/migrations'/migration_entries[0]['file']).write_text('-- corrupt payload\n')
+assert subprocess.run(['bash',str(payload/'entrypoint.sh')],env=env,capture_output=True).returncode!=0
+print('FLOWHIVE_PSA_MIGRATION_ENTRYPOINT_BEHAVIOR=PASS isolatedPostgres=true liveDeployment=false successorStaging='+str(successor_staging).lower()+' approvedCandidate='+str(not successor_staging).lower())

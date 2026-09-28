@@ -1,0 +1,331 @@
+import { useEffect, useMemo, useState } from 'react';
+import { moduleForRoute } from './module-availability-registry.js';
+import './page-context-guide.css';
+
+const API_INVENTORY_MODULES = new Set(['011', '064', '068', '078', '998']);
+const API_INVENTORY_ROLES = new Set([
+  'SUPER_ADMINISTRATOR',
+  'SUPERADMINISTRATOR',
+  'GLOBAL_ADMINISTRATOR',
+  'GLOBALADMINISTRATOR',
+  'ADMINISTRATOR'
+]);
+
+const routeContext = {
+  'my-role-in-pulse': { page: 'My Role in Pulse', purpose: 'Understand your assigned responsibilities and follow the relevant workflow.', backend: 'Effective role assignments and role playbooks', check: 'Confirm the playbook matches your effective role.' },
+  // PR467_MODULE_006_PAGE_CONTEXT
+  'toyota-hyundai-pipelines': { page: 'Toyota & Hyundai Pipelines — Module 006', purpose: 'Standalone Toyota and Hyundai pipeline management for project rows, tasks, status updates, notes, review dates, history, and exports.', backend: '/api/module-006/pipeline and /api/module-006/tasks', check: 'Create or open a project, save a status note, create a standalone task, and confirm no other project module is opened or modified.' },
+  'production-data-readiness': {
+    page: 'Production Data Readiness Center',
+    purpose: 'Shows whether core production data exists for users, roles, customers, projects, tasks, time, approvals, exports, audit evidence, and notifications.',
+    backend: '/api/production/data-readiness',
+    check: 'Refresh data readiness, review each table count/status, then open the linked pages to validate data visibility.'
+  },
+
+  /* 039_042_BILLING_CONTEXT_GUIDE_START */
+  'billing-readiness': {
+    page: 'Billing Readiness Center — Module 039',
+    purpose: 'Pre-invoice quality gate. It checks whether approved labor, expenses, customer/project mapping, notes, evidence, and exceptions are ready to become a billing package. It does not create or send the customer invoice.',
+    backend: '/api/project-intake/overview and billing-readiness data sources',
+    check: 'Resolve every blocking item, confirm the billing package is eligible, and then move the package to Module 042 for invoice preparation.'
+  },
+  'invoice-billing-center': {
+    page: 'Invoice & Billing Center — Module 042',
+    purpose: 'Live invoice operations using approved uninvoiced time, explicit effective stored-rate selection, purchase-order readiness, and immutable partial or final invoice snapshots. Fixed Price dollars remain blocked until stored milestone billing is implemented.',
+    backend: '/api/billing/candidates, /api/billing/projects/{projectId}/invoices, and /api/billing/invoices/{invoiceId}',
+    check: 'Confirm approved source lines, select only effective stored rates, resolve required purchase orders, create a partial or final invoice, and verify its PULSE-XXXXXX-N number and immutable history. Missing values remain visibly unconfigured.'
+  },
+  /* 039_042_BILLING_CONTEXT_GUIDE_END */
+
+  dashboard: {
+    page: 'Dashboard',
+    purpose: 'Role-based landing page showing the modules, alerts, and work areas available to the signed-in user.',
+    backend: '/api/dashboard/module-visibility-smoke and role/module visibility checks',
+    check: 'Confirm the app loads, navigation is usable, and visible modules match the current role.'
+  },
+  'work-task-builder': {
+    page: 'Celar AI — Module 011',
+    purpose: 'Unified operational intelligence for the US Signal Solution Provider division, including intent-first answers, private knowledge and RAG, governed live-data tools, architecture, solution composition, model lifecycle, and Project FlowHive planning.',
+    backend: '/api/celar-ai/v2/chat, /api/celar-ai/v1/production/readiness, /api/celar-ai/v1/production/architecture, and /api/project-flowhive/projects/{projectId}/ai-planner/runs',
+    check: 'Confirm the Celar AI production workspace and architecture render, the page identifies Module 011, procedural questions receive direct intent-first answers with a trust classification, and Project FlowHive generation remains review-only.'
+  },
+  'production-readiness': {
+    page: 'Production Readiness Center',
+    purpose: 'Visible release-readiness view that connects backend readiness checks to browser validation.',
+    backend: '/api/production/readiness-command-center',
+    check: 'Click Refresh readiness, confirm cards and check rows appear, then use the validation checklist.'
+  },
+  'project-allocation-info': {
+    page: 'Project Expense Upload — Module 005',
+    purpose: 'Uploads and versions project expense files, associates expenses to the correct customer, project, and owner, and tracks invoice treatment.',
+    backend: '/api/project-expenses/context, /api/project-expenses/uploads, /api/project-expenses/upload, and /api/project-expenses/import/certify',
+    check: 'Confirm the page title is Project Expense Upload, select a customer/project/owner, upload or re-upload a file, and verify the version history and billing treatment.'
+  },
+  'certify-integration': {
+    page: 'Certify Connection & Sync Center — Module 038',
+    purpose: 'Configures the governed Certify API connection used by Module 005 and controls when tested connections may use automatic synchronization.',
+    backend: '/api/certify/connection and /api/certify/connection/test',
+    check: 'Save the non-secret connection metadata, confirm server-side key and secret readiness, run a successful connection test, then enable automatic sync and choose its cadence.'
+  },
+  'project-intake': {
+    page: 'Project Intake',
+    purpose: 'Captures intake requests, triage state, documents, post-intake movement, project linking, and work-task handoff.',
+    backend: '/api/project-intake/* and /api/work-tasks/*',
+    check: 'Confirm intake summary, aging, post-intake, documents, project link, and handoff areas load.'
+  },
+  'project-workspace': {
+    page: 'Project Workspace',
+    purpose: 'Gives project and engineering roles a workspace for assigned projects, tasks, documents, hours, and remaining work.',
+    backend: '/api/project-workspace/*, /api/resource-scheduling/capacity, and /api/project-allocation-info/*',
+    check: 'Confirm assigned projects, tasks, documents, and resource context are visible for the current role.'
+  },
+  workflow: {
+    page: 'Approval / Export / Audit Workflows',
+    purpose: 'Coordinates workflow validation, approvals, export package readiness, reconciliation, lock evidence, and audit evidence.',
+    backend: '/api/workflow/*, /api/time-exports, and /api/export-packages/readiness-summary',
+    check: 'Confirm approval, export, reconciliation, validation rules, and evidence sections load.'
+  },
+  'manager-approval': {
+    page: 'Manager Approvals',
+    purpose: 'Allows managers and authorized roles to review submitted time, approve, decline, unlock, and monitor approval queues.',
+    backend: '/api/manager/approvals',
+    check: 'Confirm approval queues are visible only for roles with approval authority.'
+  },
+  'role-admin': {
+    page: 'Role / Security Administration',
+    purpose: 'Manages role access, permissions, route contracts, role visibility, and administrator View-As governance.',
+    backend: '/api/admin/roles, /api/admin/users, and role enforcement middleware',
+    check: 'Confirm restricted role/security controls are visible only to administrator or system roles.'
+  },
+  'audit-history': {
+    page: 'Audit History',
+    purpose: 'Shows traceability for login, role, approval, export, notification, and administrative actions.',
+    backend: '/api/audit/history and /api/audit-history/events',
+    check: 'Confirm audit records, filters, and event evidence load.'
+  },
+  'customer-directory': {
+    page: 'Customer Directory',
+    purpose: 'Maintains customer/account records, contacts, and customer data used by intake, billing, and reconciliation workflows.',
+    backend: '/api/customers/*',
+    check: 'Confirm customer records, contacts, and empty states load clearly.'
+  },
+  'contracts': {
+    page: 'Contracts & Block of Hours — Module 060',
+    purpose: 'Manages prepaid customer hours, credits, expiration, work consumption, and weekly Account Executive XLSX reporting.',
+    backend: '/api/contracts/*',
+    check: 'Confirm role-based access, empty state, header explanations, embedded help, contract creation controls, and weekly schedule controls.'
+  },
+  'user-admin': {
+    page: 'User Administration',
+    purpose: 'Manages users, local account status, active status, and role assignment readiness.',
+    backend: '/api/admin/users and /api/admin/roles',
+    check: 'Confirm user records load and role-changing controls remain restricted.'
+  },
+  'azure-admin': {
+    page: 'Azure / Entra Admin',
+    purpose: 'Supports Entra configuration, import preview, selected import, and identity readiness.',
+    backend: '/api/azure-admin/*',
+    check: 'Confirm configuration, preview, and import controls are visible only to authorized roles.'
+  },
+  'service-control': {
+    page: 'Service Control',
+    purpose: 'Provides operational service status and controlled restart visibility.',
+    backend: 'system service controls through protected API operations',
+    check: 'Confirm service controls are restricted and service status is understandable.'
+  },
+  'backup-dr': {
+    page: 'Backup / DR',
+    purpose: 'Shows backup and disaster recovery readiness, backup state, and restore preparedness.',
+    backend: 'backup status, restore-readiness, and operational evidence endpoints',
+    check: 'Confirm backup status, DR readiness, and restore evidence are visible.'
+  },
+  'restore-validation': {
+    page: 'Restore Validation',
+    purpose: 'Validates restore points, restore readiness, and restore test evidence before relying on backups.',
+    backend: 'restore validation and backup evidence endpoints',
+    check: 'Confirm restore evidence is clear and current.'
+  },
+  'backup-retention': {
+    page: 'Backup Retention',
+    purpose: 'Manages backup retention review, cleanup readiness, and restore-point protection.',
+    backend: 'backup retention and cleanup-readiness endpoints',
+    check: 'Confirm retention status and protected restore points are understandable.'
+  },
+  'replication-sync': {
+    page: 'Replication Sync',
+    purpose: 'Shows replication and synchronization status across backup, database, and operational readiness workflows.',
+    backend: 'replication/sync status endpoints',
+    check: 'Confirm sync status and failure states are clear.'
+  },
+  timesheet: {
+    page: 'Timesheet',
+    purpose: 'Allows users to enter, save, submit, and review project and non-project time.',
+    backend: '/api/timesheets/*',
+    check: 'Confirm time entry, save, submit, and empty-state behavior work for the role.'
+  },
+  utilization: {
+    page: 'Utilization',
+    purpose: 'Shows utilization performance against quarterly and annual targets.',
+    backend: '/api/utilization/*',
+    check: 'Confirm utilization metrics load and match expected role visibility.'
+  },
+  'time-compliance': {
+    page: 'Time Compliance',
+    purpose: 'Supports missing-time visibility, reminders, manager/PTC review, and month-end time controls.',
+    backend: '/api/time-compliance/* and email notification readiness endpoints',
+    check: 'Confirm compliance status and reminder readiness are visible.'
+  }
+};
+
+const groupPurpose = {
+  'AI & Automation': 'Provides governed Celar AI, private knowledge, routing, model, and automation capabilities without bypassing role or data-scope controls.',
+  'Time Management': 'Supports governed time entry, compliance, calendars, and related operational controls.',
+  Approvals: 'Supports controlled review, approval, export, and audit decisions.',
+  'Resource Management': 'Supports authorized resource, utilization, workload, and capacity decisions.',
+  'Project Management': 'Supports scoped project administration and delivery oversight.',
+  'Project Delivery': 'Supports customer delivery planning and execution within the current user’s project scope.',
+  'Project Operations': 'Supports authoritative project operations and governed delivery records.',
+  'Sales & Opportunities': 'Supports governed sales intake, opportunity, pipeline, and handoff workflows.',
+  Customers: 'Supports governed customer records, contacts, commercial context, and customer-to-project workflows.',
+  Resources: 'Supports governed people qualifications, certifications, assignments, and delivery-readiness records.',
+  'Reports & Workflow': 'Supports role-scoped operational reporting, exceptions, billing, and workflow evidence.',
+  Integrations: 'Supports governed external-system connection, readiness, synchronization, and audit evidence.',
+  Administration: 'Supports restricted identity, role, and application administration.',
+  Security: 'Supports restricted security and AI configuration controls.',
+  'Security & Audit': 'Supports security operations, evidence, audit, retention, and privacy controls.',
+  'Platform Operations': 'Supports platform health, recovery, diagnostics, delivery, and operational governance.',
+  'Help & Documentation': 'Provides governed help, documentation, defect, and user-guidance workflows.'
+};
+
+function authenticationHeaders() {
+  try {
+    const session = JSON.parse(window.localStorage.getItem('projectPulseAuthSession') || 'null');
+    if (!session?.sessionToken) return {};
+    return { Authorization: `Bearer ${session.sessionToken}`, 'X-ProjectPulse-Session': session.sessionToken };
+  } catch {
+    return {};
+  }
+}
+
+function activeViewAsUser() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem('projectPulseViewAsUser') || 'null');
+    return value?.userId ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function canRequestLiveApiInventory(moduleNumber) {
+  if (activeViewAsUser() || !API_INVENTORY_MODULES.has(String(moduleNumber || '').toUpperCase())) {
+    return false;
+  }
+  const navigation = window.__projectPulseEffectiveNavigation;
+  if (!navigation || navigation.state !== 'ready' || navigation.isViewAs) return false;
+  return (navigation.roleCodes || [])
+    .map((role) => String(role || '').trim().toUpperCase().replace(/[\s-]+/g, '_'))
+    .some((role) => API_INVENTORY_ROLES.has(role));
+}
+
+function getContext(route, module) {
+  const configured = routeContext[route] || {};
+  if (!module) return {
+    page: configured.page || route || 'Current page',
+    purpose: configured.purpose || 'Role-protected application workspace for the current user.',
+    backend: configured.backend || 'Role-protected application endpoints',
+    check: configured.check || 'Confirm the page loads, navigation works, and role restrictions match the active user.'
+  };
+  return {
+    page: `${module.displayName} — Module ${module.moduleNumber}`,
+    purpose: module.description || configured.purpose || groupPurpose[module.group] || `Provides the governed ${module.displayName} workflow.`,
+    backend: configured.backend || `Live endpoints registered to Module ${module.moduleNumber}`,
+    check: configured.check || `Confirm ${module.displayName} loads, its primary workflow completes, and its role and project scope are enforced.`
+  };
+}
+
+export default function PageContextGuide({ activeRoute }) {
+  const module = useMemo(() => moduleForRoute(activeRoute), [activeRoute]);
+  const context = useMemo(() => getContext(activeRoute, module), [activeRoute, module]);
+  const [apiEvidence, setApiEvidence] = useState({ status: 'idle', apis: [] });
+  const [permissionRevision, setPermissionRevision] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setPermissionRevision((current) => current + 1);
+    window.addEventListener('projectpulse:permission-navigation-updated', refresh);
+    window.addEventListener('projectpulse:view-as-changed', refresh);
+    return () => {
+      window.removeEventListener('projectpulse:permission-navigation-updated', refresh);
+      window.removeEventListener('projectpulse:view-as-changed', refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (!module) {
+      setApiEvidence({ status: 'not_applicable', apis: [] });
+      return () => { active = false; };
+    }
+    if (activeViewAsUser()) {
+      setApiEvidence({ status: 'view_as_documented_contract', apis: [] });
+      return () => { active = false; };
+    }
+    if (!canRequestLiveApiInventory(module.moduleNumber)) {
+      setApiEvidence({ status: 'documented_contract', apis: [] });
+      return () => { active = false; };
+    }
+    setApiEvidence({ status: 'loading', apis: [] });
+    const url = `/api/celar-ai/v1/system/apis?module=${encodeURIComponent(module.moduleNumber)}&limit=200`;
+    fetch(url, { headers: authenticationHeaders() })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((payload) => {
+        if (!active) return;
+        const apis = (payload.apis || []).filter((api) => !String(api.routePattern || '').startsWith('/api/pulse-ai'));
+        setApiEvidence({ status: 'live', apis, contractVersion: payload.contractVersion });
+      })
+      .catch(() => {
+        if (active) setApiEvidence({ status: 'permission_limited', apis: [] });
+      });
+    return () => { active = false; };
+  }, [module, permissionRevision]);
+
+  const apiRoutes = apiEvidence.apis.map((api) => `${api.method} ${api.routePattern}`).filter(Boolean);
+  const backendSummary = apiEvidence.status === 'live'
+    ? `${apiRoutes.length} live registered ${apiRoutes.length === 1 ? 'endpoint' : 'endpoints'}`
+    : context.backend;
+
+  return (
+    <aside className="page-context-guide" aria-label="Page context guide">
+      <details>
+        <summary>
+          <span>
+            <strong>{context.page}</strong>
+            <small>Help and workflow details</small>
+          </span>
+        </summary>
+
+        <div className="page-context-guide-grid">
+          <div>
+            <span>Purpose</span>
+            <p>{context.purpose}</p>
+          </div>
+
+          <div>
+            <span>Backend support</span>
+            <p><code>{backendSummary}</code></p>
+            {apiRoutes.length ? <details className="page-context-api-list"><summary>Show exact API routes</summary><ul>{apiRoutes.map((route) => <li key={route}><code>{route}</code></li>)}</ul></details> : null}
+            {apiEvidence.status === 'permission_limited' ? <small>Exact live API inventory requires the API inventory permission; the documented module contract is shown.</small> : null}
+            {apiEvidence.status === 'view_as_documented_contract' ? <small>View-As uses the effective user’s documented module contract and does not request administrator-only API inventory.</small> : null}
+          </div>
+
+          <div>
+            <span>What to check</span>
+            <p>{context.check}</p>
+          </div>
+        </div>
+      </details>
+    </aside>
+  );
+}

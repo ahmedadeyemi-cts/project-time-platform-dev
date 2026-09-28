@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="${PROJECTPULSE_RELEASE_ROOT:-$(pwd -P)}"
+ACR_NAME="${AZURE_ACR_NAME:-}"
+RELEASE_COMMIT="${RELIABILITY_RELEASE_COMMIT:-}"
+RUN_ID="${GITHUB_RUN_ID:-0}"
+RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT:-0}"
+MIGRATION_FILE="$ROOT/database/migrations/096_project_planning_document_authority.sql"
+IDENTITY_SAFE_MIGRATION_FILE="$ROOT/database/migrations/097_project_planning_identity_safe_admission.sql"
+OWNER_STORAGE_MIGRATION_FILE="$ROOT/database/migrations/098_module_management_owner_storage_reconciliation.sql"
+CUSTOMER_SOURCE_MIGRATION_FILE="$ROOT/database/migrations/098_customer_directory_source_authority.sql"
+MODULE025_MIGRATION_FILE="$ROOT/database/migrations/099_module025_sow_gsd_workspace.sql"
+MODULE001B_CATALOG_MIGRATION_FILE="$ROOT/database/migrations/100_module001b_catalog_ownership_reconciliation.sql"
+MODULE025_PROJECT_NAME_MIGRATION_FILE="$ROOT/database/migrations/109_module025_project_name.sql"
+AUTOMATIC_ADMISSION_LAYA_MIGRATION_FILE="$ROOT/database/migrations/125_automatic_document_admission_laya.sql"
+MIGRATION_RUNNER="$ROOT/scripts/release-test/run-project-planning-document-authority-migration-job.sh"
+EVIDENCE_ROOT="${EVIDENCE_DIR:-}"
+CONTEXT=""
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [[ -n "$CONTEXT" && -d "$CONTEXT" ]]; then
+    chmod -R u+rwX "$CONTEXT" 2>/dev/null || true
+    rm -rf "$CONTEXT"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+[[ "$ACR_NAME" =~ ^[A-Za-z0-9]+$ ]] || fail "AZURE_ACR_NAME is missing or invalid."
+[[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "RELIABILITY_RELEASE_COMMIT must be an exact commit."
+[[ -s "$MIGRATION_FILE" ]] || fail "Migration 096 source is missing."
+[[ -s "$IDENTITY_SAFE_MIGRATION_FILE" ]] || fail "Migration 097 source is missing."
+[[ -s "$OWNER_STORAGE_MIGRATION_FILE" ]] || fail "Module owner storage migration 098 source is missing."
+[[ -s "$CUSTOMER_SOURCE_MIGRATION_FILE" ]] || fail "Customer source authority migration 098 source is missing."
+[[ -s "$MODULE025_MIGRATION_FILE" ]] || fail "Module 025 SOW/GSD migration 099 source is missing."
+[[ -s "$MODULE001B_CATALOG_MIGRATION_FILE" ]] || fail "Module 001B catalog migration 100 source is missing."
+[[ -s "$MODULE025_PROJECT_NAME_MIGRATION_FILE" ]] || fail "Module 025 project name migration 109 source is missing."
+[[ -s "$AUTOMATIC_ADMISSION_LAYA_MIGRATION_FILE" ]] || fail "Automatic document admission migration 125 source is missing."
+[[ -s "$MIGRATION_RUNNER" ]] || fail "Migration 096 private-network runner is missing."
+for command_name in az jq mktemp install chmod node; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required."
+done
+
+CONTEXT="$(mktemp -d "${RUNNER_TEMP:-/tmp}/project-planning-096-${RUN_ID}-${RUN_ATTEMPT}-XXXXXX")"
+chmod 0700 "$CONTEXT"
+install -d -m 0700 "$CONTEXT/database/migrations"
+install -m 0444 "$MIGRATION_FILE" "$CONTEXT/database/migrations/096_project_planning_document_authority.sql"
+install -m 0444 "$IDENTITY_SAFE_MIGRATION_FILE" "$CONTEXT/database/migrations/097_project_planning_identity_safe_admission.sql"
+install -m 0444 "$OWNER_STORAGE_MIGRATION_FILE" "$CONTEXT/database/migrations/098_module_management_owner_storage_reconciliation.sql"
+install -m 0444 "$CUSTOMER_SOURCE_MIGRATION_FILE" "$CONTEXT/database/migrations/098_customer_directory_source_authority.sql"
+install -m 0444 "$MODULE025_MIGRATION_FILE" "$CONTEXT/database/migrations/099_module025_sow_gsd_workspace.sql"
+install -m 0444 "$MODULE001B_CATALOG_MIGRATION_FILE" "$CONTEXT/database/migrations/100_module001b_catalog_ownership_reconciliation.sql"
+install -m 0444 "$ROOT/database/migrations/101_deepseek_v4_provider.sql" "$CONTEXT/database/migrations/101_deepseek_v4_provider.sql"
+install -m 0444 "$ROOT/database/migrations/112_optional_ai_providers.sql" "$CONTEXT/database/migrations/112_optional_ai_providers.sql"
+node "$ROOT/scripts/release-test/reconcile-module-catalog.mjs" "$RELEASE_COMMIT" "$CONTEXT/database/migrations/108_builtin_module_catalog_reconciliation.sql"
+install -m 0444 "$MODULE025_PROJECT_NAME_MIGRATION_FILE" "$CONTEXT/database/migrations/109_module025_project_name.sql"
+install -m 0444 "$ROOT/database/migrations/115_module_066_task_notifications.sql" "$CONTEXT/database/migrations/115_module_066_task_notifications.sql"
+install -m 0444 "$ROOT/scripts/release-test/verify-flowhive-task-notifications.sql" "$CONTEXT/database/verify-flowhive-task-notifications.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/115_module_066_task_notifications.sql database/verify-flowhive-task-notifications.sql > database/flowhive-notifications.sha256)
+install -m 0444 "$ROOT/database/migrations/121_flowhive_sequential_phase_checkpoints.sql" "$CONTEXT/database/migrations/121_flowhive_sequential_phase_checkpoints.sql"
+install -m 0444 "$ROOT/scripts/release-test/verify-flowhive-sequential-checkpoints.sql" "$CONTEXT/database/verify-flowhive-sequential-checkpoints.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/121_flowhive_sequential_phase_checkpoints.sql database/verify-flowhive-sequential-checkpoints.sql > database/flowhive-sequential.sha256)
+install -m 0444 "$ROOT/database/migrations/122_flowhive_automatic_first_draft.sql" "$CONTEXT/database/migrations/122_flowhive_automatic_first_draft.sql"
+install -m 0444 "$ROOT/scripts/release-test/verify-flowhive-automatic-first-draft.sql" "$CONTEXT/database/verify-flowhive-automatic-first-draft.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/122_flowhive_automatic_first_draft.sql database/verify-flowhive-automatic-first-draft.sql > database/flowhive-automatic.sha256)
+install -m 0444 "$ROOT/database/migrations/123_module064_external_generation_approval.sql" "$CONTEXT/database/migrations/123_module064_external_generation_approval.sql"
+install -m 0444 "$ROOT/scripts/release-test/verify-module064-external-generation-approval.sql" "$CONTEXT/database/verify-module064-external-generation-approval.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/123_module064_external_generation_approval.sql database/verify-module064-external-generation-approval.sql > database/module064-approval.sha256)
+install -m 0444 "$ROOT/database/migrations/124_module025_service_scope.sql" "$CONTEXT/database/migrations/124_module025_service_scope.sql"
+install -m 0444 "$ROOT/scripts/release-test/verify-module025-service-scope.sql" "$CONTEXT/database/verify-module025-service-scope.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/124_module025_service_scope.sql database/verify-module025-service-scope.sql > database/module025-service-scope.sha256)
+install -m 0444 "$AUTOMATIC_ADMISSION_LAYA_MIGRATION_FILE" "$CONTEXT/database/migrations/125_automatic_document_admission_laya.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/125_automatic_document_admission_laya.sql > database/automatic-admission-laya.sha256)
+install -m 0444 "$ROOT/database/migrations/127_flowhive_pm_automatic_planning_defaults.sql" "$CONTEXT/database/migrations/127_flowhive_pm_automatic_planning_defaults.sql"
+(cd "$CONTEXT" && sha256sum database/migrations/127_flowhive_pm_automatic_planning_defaults.sql > database/flowhive-pm-defaults.sha256)
+printf '%s\n' "$RELEASE_COMMIT" > "$CONTEXT/release-commit"
+chmod 0444 "$CONTEXT/release-commit"
+
+cat > "$CONTEXT/entrypoint.sh" <<'ENTRYPOINT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT=/opt/projectpulse/release
+EXPECTED="${MAIN_RELEASE_EXPECTED_RELEASE_COMMIT:-}"
+ACTUAL="$(cat "$ROOT/.projectpulse-release-commit")"
+[[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$ACTUAL" == "$EXPECTED" ]] || {
+  echo 'ERROR: Migration 096 image release identity mismatch.' >&2
+  exit 1
+}
+MIGRATION="$ROOT/database/migrations/096_project_planning_document_authority.sql"
+[[ -f "$MIGRATION" ]] || {
+  echo 'ERROR: Migration 096 source is missing from the immutable image.' >&2
+  exit 1
+}
+psql -X -v ON_ERROR_STOP=1 --file "$MIGRATION"
+IDENTITY_SAFE_MIGRATION="$ROOT/database/migrations/097_project_planning_identity_safe_admission.sql"
+[[ -f "$IDENTITY_SAFE_MIGRATION" ]] || { echo 'ERROR: Migration 097 source is missing from the immutable image.' >&2; exit 1; }
+psql -X -v ON_ERROR_STOP=1 --file "$IDENTITY_SAFE_MIGRATION"
+OWNER_STORAGE_MIGRATION="$ROOT/database/migrations/098_module_management_owner_storage_reconciliation.sql"
+[[ -f "$OWNER_STORAGE_MIGRATION" ]] || { echo 'ERROR: Module owner storage migration 098 source is missing from the immutable image.' >&2; exit 1; }
+psql -X -v ON_ERROR_STOP=1 --file "$OWNER_STORAGE_MIGRATION"
+CUSTOMER_SOURCE_MIGRATION="$ROOT/database/migrations/098_customer_directory_source_authority.sql"
+[[ -f "$CUSTOMER_SOURCE_MIGRATION" ]] || { echo 'ERROR: Customer source authority migration 098 source is missing from the immutable image.' >&2; exit 1; }
+psql -X -v ON_ERROR_STOP=1 --file "$CUSTOMER_SOURCE_MIGRATION"
+MODULE025_MIGRATION="$ROOT/database/migrations/099_module025_sow_gsd_workspace.sql"
+[[ -f "$MODULE025_MIGRATION" ]] || { echo 'ERROR: Module 025 SOW/GSD migration 099 source is missing from the immutable image.' >&2; exit 1; }
+psql -X -v ON_ERROR_STOP=1 --file "$MODULE025_MIGRATION"
+MODULE001B_CATALOG_MIGRATION="$ROOT/database/migrations/100_module001b_catalog_ownership_reconciliation.sql"
+[[ -f "$MODULE001B_CATALOG_MIGRATION" ]] || { echo 'ERROR: Module 001B catalog migration 100 source is missing from the immutable image.' >&2; exit 1; }
+psql -X -v ON_ERROR_STOP=1 --file "$MODULE001B_CATALOG_MIGRATION"
+# Never replay the older, narrower constraint once migration 101 has run.
+# Reapply 112 even when ledgered, repairing the previously deployed replay order.
+if [[ "$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='101_deepseek_v4_provider')")" != t ]]; then
+  psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/101_deepseek_v4_provider.sql"
+fi
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/112_optional_ai_providers.sql"
+[[ "$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='101_deepseek_v4_provider')")" == t ]] || exit 1
+echo 'MIGRATION_101_DEEPSEEK_V4=APPLIED_AND_VERIFIED'
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/108_builtin_module_catalog_reconciliation.sql"
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/109_module025_project_name.sql"
+[[ "$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='module025_sow_gsd_engagements' AND column_name='project_name')")" == t ]] || exit 1
+echo 'MIGRATION_109_MODULE025_PROJECT_NAME=APPLIED_AND_VERIFIED'
+# Migration 115 checks its existing 064/103 prerequisites and preserves saved policies.
+# Verify the exact packaged bytes, then fail closed if UAT policies permit live delivery.
+(cd "$ROOT" && sha256sum --check --status database/flowhive-notifications.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/115_module_066_task_notifications.sql"
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/verify-flowhive-task-notifications.sql"
+echo 'MIGRATION_115_FLOWHIVE_TASK_NOTIFICATIONS=APPLIED_AND_VERIFIED'
+(cd "$ROOT" && sha256sum --check --status database/flowhive-sequential.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/121_flowhive_sequential_phase_checkpoints.sql"
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/verify-flowhive-sequential-checkpoints.sql"
+echo 'MIGRATION_121_FLOWHIVE_SEQUENTIAL_CHECKPOINTS=APPLIED_AND_VERIFIED'
+(cd "$ROOT" && sha256sum --check --status database/flowhive-automatic.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/122_flowhive_automatic_first_draft.sql"
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/verify-flowhive-automatic-first-draft.sql"
+echo 'MIGRATION_122_FLOWHIVE_AUTOMATIC_FIRST_DRAFT=APPLIED_AND_VERIFIED'
+(cd "$ROOT" && sha256sum --check --status database/module064-approval.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/123_module064_external_generation_approval.sql"
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/verify-module064-external-generation-approval.sql"
+echo 'MIGRATION_123_MODULE064_EXTERNAL_GENERATION_APPROVAL=APPLIED_AND_VERIFIED'
+(cd "$ROOT" && sha256sum --check --status database/module025-service-scope.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/124_module025_service_scope.sql"
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/verify-module025-service-scope.sql"
+echo 'MIGRATION_124_MODULE025_SERVICE_SCOPE=APPLIED_AND_VERIFIED'
+
+(cd "$ROOT" && sha256sum --check --status database/automatic-admission-laya.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/125_automatic_document_admission_laya.sql"
+
+(cd "$ROOT" && sha256sum --check --status database/flowhive-pm-defaults.sha256)
+psql -X -v ON_ERROR_STOP=1 --file "$ROOT/database/migrations/127_flowhive_pm_automatic_planning_defaults.sql"
+
+verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='096_project_planning_document_authority')::text || '|' ||
+  (to_regclass('public.project_planning_document_authority') IS NOT NULL)::text || '|' ||
+  (to_regclass('public.current_project_planning_document_authority') IS NOT NULL)::text || '|' ||
+  (to_regprocedure('public.projectpulse_reconcile_project_planning_document_authority(uuid,uuid,uuid,text,text,uuid,text,text,text,text,text,text,jsonb)') IS NOT NULL)::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='project_planning_document_authority' AND column_name='source_sha256')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='project_planning_document_authority' AND column_name='document_version_id')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='project_planning_document_authority' AND column_name='is_current')::text;
+SQL
+)"
+[[ "$verification" == 'true|true|true|true|true|true|true' ]] || {
+  echo "ERROR: Migration 096 verification failed: $verification" >&2
+  exit 1
+}
+identity_safe_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='097_project_planning_identity_safe_admission')::text || '|' ||
+  (NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.project_intake_documents'::regclass AND tgname IN ('trg_module001_057_queue_project_ai_document_insert','trg_module001_057_queue_project_ai_document_update') AND NOT tgisinternal))::text || '|' ||
+  (to_regprocedure('public.module001_057_queue_project_ai_document()') IS NULL)::text || '|' ||
+  (NOT EXISTS (SELECT 1 FROM pulse_ai_document_processing_jobs WHERE requested_purpose='project_ai_generation_grounding' AND actual_user_id IS NULL AND effective_user_id IS NULL AND job_status IN ('queued','scanning','extracting','awaiting_ocr','embedding','indexing','retry_wait','cancel_requested')))::text;
+SQL
+)"
+[[ "$identity_safe_verification" == 'true|true|true|true' ]] || {
+  echo "ERROR: Migration 097 verification failed: $identity_safe_verification" >&2
+  exit 1
+}
+owner_storage_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='098_module_management_owner_storage_reconciliation')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='scoped_role_policy_modules' AND column_name='owner_user_id')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='scoped_role_policy_modules' AND column_name='owner_revision_number' AND is_nullable='NO')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='scoped_role_policy_modules' AND column_name='owner_updated_at')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='scoped_role_policy_modules' AND column_name='owner_updated_by_user_id')::text || '|' ||
+  EXISTS(SELECT 1 FROM pg_constraint WHERE conname='fk_scoped_role_policy_modules_owner_user' AND conrelid='public.scoped_role_policy_modules'::regclass)::text || '|' ||
+  EXISTS(SELECT 1 FROM pg_constraint WHERE conname='fk_scoped_role_policy_modules_owner_updated_by' AND conrelid='public.scoped_role_policy_modules'::regclass)::text;
+SQL
+)"
+[[ "$owner_storage_verification" == 'true|true|true|true|true|true|true' ]] || {
+  echo "ERROR: Module owner storage migration 098 verification failed: $owner_storage_verification" >&2
+  exit 1
+}
+customer_source_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='098_customer_directory_source_authority')::text || '|' ||
+  (to_regclass('public.customer_directory_source_authority') IS NOT NULL)::text || '|' ||
+  (to_regclass('public.customer_directory_source_authority_history') IS NOT NULL)::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='customer_directory_source_authority' AND column_name='source_mode')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='customer_directory_source_authority' AND column_name='provider_key')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='customer_directory_source_links' AND column_name='source_system' AND character_maximum_length >= 120)::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='customer_directory_sync_runs' AND column_name='source_system' AND character_maximum_length >= 120)::text;
+SQL
+)"
+[[ "$customer_source_verification" == 'true|true|true|true|true|true|true' ]] || {
+  echo "ERROR: Customer source authority migration 098 verification failed: $customer_source_verification" >&2
+  exit 1
+}
+module025_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  (to_regclass('public.module025_sow_gsd_engagements') IS NOT NULL)::text || '|' ||
+  (to_regclass('public.module025_sow_gsd_phases') IS NOT NULL)::text || '|' ||
+  (to_regclass('public.module025_sow_gsd_events') IS NOT NULL)::text || '|' ||
+  (to_regprocedure('public.module025_protect_sow_gsd_identity()') IS NOT NULL)::text || '|' ||
+  EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.module025_sow_gsd_engagements'::regclass AND tgname='trg_module025_protect_sow_gsd_identity' AND NOT tgisinternal)::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='module025_sow_gsd_engagements' AND column_name='commercial_model')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='module025_sow_gsd_phases' AND column_name='suggested_hours')::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='module025_sow_gsd_phases' AND column_name='final_hours')::text;
+SQL
+)"
+[[ "$module025_verification" == 'true|true|true|true|true|true|true|true' ]] || {
+  echo "ERROR: Module 025 SOW/GSD migration 099 verification failed: $module025_verification" >&2
+  exit 1
+}
+module001b_catalog_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='100_module001b_catalog_ownership_reconciliation')::text || '|' ||
+  EXISTS(
+    SELECT 1
+    FROM scoped_role_policy_modules
+    WHERE module_code='001B'
+      AND module_name='Time Reallocation & Corrections'
+      AND route_scope='time-reallocation'
+      AND current_state='Installed'
+      AND is_active=TRUE
+      AND owner_revision_number IS NOT NULL
+  )::text || '|' ||
+  (to_regclass('public.module_catalog_reconciliation_100_module001b_evidence') IS NOT NULL)::text;
+SQL
+)"
+[[ "$module001b_catalog_verification" == 'true|true|true' ]] || {
+  echo "ERROR: Module 001B catalog migration 100 verification failed: $module001b_catalog_verification" >&2
+  exit 1
+}
+automatic_admission_laya_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='125_automatic_document_admission_laya')::text || '|' ||
+  (to_regclass('public.pulse_ai_laya_classification_jobs') IS NOT NULL)::text || '|' ||
+  EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='project_intake_documents' AND column_name='pulse_ai_laya_classification_status')::text || '|' ||
+  EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='ux_pulse_ai_laya_classification_jobs_identity')::text;
+SQL
+)"
+[[ "$automatic_admission_laya_verification" == 'true|true|true|true' ]] || {
+  echo "ERROR: Automatic document admission/Laya migration 125 verification failed: $automatic_admission_laya_verification" >&2
+  exit 1
+}
+flowhive_pm_defaults_verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+SELECT
+  EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='127_flowhive_pm_automatic_planning_defaults')::text || '|' ||
+  (to_regclass('public.project_flowhive_auto_plan_user_defaults') IS NOT NULL)::text || '|' ||
+  EXISTS(
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t ON t.oid=c.conrelid
+    WHERE t.relname='project_flowhive_auto_plans'
+      AND c.conname='project_flowhive_auto_plans_source_check'
+      AND pg_get_constraintdef(c.oid) LIKE '%pm_default%'
+  )::text;
+SQL
+)"
+[[ "$flowhive_pm_defaults_verification" == 'true|true|true' ]] || {
+  echo "ERROR: FlowHive PM automatic planning migration 127 verification failed: $flowhive_pm_defaults_verification" >&2
+  exit 1
+}
+echo 'MIGRATION_096=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_097=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_098_OWNER_STORAGE=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_098_CUSTOMER_SOURCE=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_099_MODULE025_SOW_GSD=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_100_MODULE001B_CATALOG=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_109_MODULE025_PROJECT_NAME=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_125_AUTOMATIC_DOCUMENT_ADMISSION_LAYA=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_127_FLOWHIVE_PM_AUTOMATIC_PLANNING_DEFAULTS=APPLIED_AND_VERIFIED'
+ENTRYPOINT
+chmod 0555 "$CONTEXT/entrypoint.sh"
+
+DOCKERFILE="$CONTEXT/Dockerfile"
+cat > "$DOCKERFILE" <<'DOCKERFILE_CONTENT'
+FROM postgres:16-alpine
+RUN apk add --no-cache bash coreutils ca-certificates
+WORKDIR /opt/projectpulse/release
+COPY release-commit .projectpulse-release-commit
+COPY database/ database/
+COPY entrypoint.sh /usr/local/bin/project-planning-document-authority-migrate
+RUN chmod 0555 /usr/local/bin/project-planning-document-authority-migrate \
+    && chmod 0444 .projectpulse-release-commit database/migrations/*.sql
+ENTRYPOINT ["/usr/local/bin/project-planning-document-authority-migrate"]
+DOCKERFILE_CONTENT
+[[ -f "$DOCKERFILE" ]] || fail "Migration 096 Dockerfile was not created in its ACR build context."
+
+SHORT_RELEASE="${RELEASE_COMMIT:0:12}"
+REPOSITORY="project-health-dashboard-document-authority-migrator"
+TAG="rel-${SHORT_RELEASE}-${RUN_ID}-${RUN_ATTEMPT}"
+IMAGE="$REPOSITORY:$TAG"
+BUILD_SUCCEEDED=0
+for attempt in 1 2; do
+  if az acr build \
+      --registry "$ACR_NAME" \
+      --image "$IMAGE" \
+      --file "$DOCKERFILE" \
+      --timeout 1800 \
+      "$CONTEXT"; then
+    BUILD_SUCCEEDED=1
+    break
+  fi
+  (( attempt < 2 )) && sleep $((attempt * 15))
+done
+(( BUILD_SUCCEEDED == 1 )) || fail "Migration 096 immutable image build failed."
+
+DIGEST=""
+for attempt in $(seq 1 12); do
+  DIGEST="$(az acr repository show \
+    --name "$ACR_NAME" \
+    --image "$IMAGE" \
+    --query digest \
+    -o tsv \
+    --only-show-errors 2>/dev/null || true)"
+  if [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    break
+  fi
+  (( attempt < 12 )) && sleep 5
+done
+[[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Migration 096 immutable digest could not be resolved."
+
+export RELIABILITY_MIGRATION_IMAGE="$ACR_NAME.azurecr.io/$REPOSITORY@$DIGEST"
+export RELIABILITY_MIGRATION_JOB_NAME="pp096-${RUN_ID}-${RUN_ATTEMPT}"
+export RELIABILITY_MIGRATION_SCOPE="project-planning-document-authority-test"
+bash "$MIGRATION_RUNNER"
+# The private-network entrypoint already applied and verified these migrations.
+# The host reports success only after that job succeeds; it must never run SQL.
+echo 'MIGRATION_115_FLOWHIVE_TASK_NOTIFICATIONS=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_121_FLOWHIVE_SEQUENTIAL_CHECKPOINTS=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_122_FLOWHIVE_AUTOMATIC_FIRST_DRAFT=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_123_MODULE064_EXTERNAL_GENERATION_APPROVAL=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_124_MODULE025_SERVICE_SCOPE=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_125_AUTOMATIC_DOCUMENT_ADMISSION_LAYA=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_127_FLOWHIVE_PM_AUTOMATIC_PLANNING_DEFAULTS=APPLIED_AND_VERIFIED'
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  install -d -m 0700 "$EVIDENCE_ROOT"
+  migration_sha256="$(sha256sum "$ROOT/database/migrations/115_module_066_task_notifications.sql" | cut -d ' ' -f 1)"
+  jq -n --arg releaseCommit "$RELEASE_COMMIT" --arg image "$RELIABILITY_MIGRATION_IMAGE" --arg sha256 "$migration_sha256" \
+    '{status:"applied_and_verified",migration:"115_module_066_task_notifications",sha256:$sha256,releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,deliveryBoundary:"test_only_or_locked",productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-115.json"
+fi
+echo 'MIGRATION_096=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_097=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_098_OWNER_STORAGE=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_098_CUSTOMER_SOURCE=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_099_MODULE025_SOW_GSD=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_100_MODULE001B_CATALOG=APPLIED_AND_VERIFIED'
+echo 'MIGRATION_109_MODULE025_PROJECT_NAME=APPLIED_AND_VERIFIED'
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  install -d -m 0700 "$EVIDENCE_ROOT"
+  automatic_admission_laya_sha256="$(sha256sum "$ROOT/database/migrations/125_automatic_document_admission_laya.sql" | cut -d ' ' -f 1)"
+  jq -n --arg releaseCommit "$RELEASE_COMMIT" --arg image "$RELIABILITY_MIGRATION_IMAGE" --arg sha256 "$automatic_admission_laya_sha256" \
+    '{status:"applied_and_verified",migration:"125_automatic_document_admission_laya",sha256:$sha256,releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,deliveryBoundary:"test_only_or_locked",productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-125.json"
+fi
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  install -d -m 0700 "$EVIDENCE_ROOT"
+  jq -n \
+    --arg releaseCommit "$RELEASE_COMMIT" \
+    --arg image "$RELIABILITY_MIGRATION_IMAGE" \
+    '{status:"applied_and_verified",migration:"096_project_planning_document_authority",releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-096.json"
+fi
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  jq -n \
+    --arg releaseCommit "$RELEASE_COMMIT" \
+    --arg image "$RELIABILITY_MIGRATION_IMAGE" \
+    '{status:"applied_and_verified",migration:"097_project_planning_identity_safe_admission",releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-097.json"
+fi
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  jq -n \
+    --arg releaseCommit "$RELEASE_COMMIT" \
+    --arg image "$RELIABILITY_MIGRATION_IMAGE" \
+    '{status:"applied_and_verified",migration:"098_module_management_owner_storage_reconciliation",releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-098.json"
+fi
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  jq -n \
+    --arg releaseCommit "$RELEASE_COMMIT" \
+    --arg image "$RELIABILITY_MIGRATION_IMAGE" \
+    '{status:"applied_and_verified",migration:"098_customer_directory_source_authority",releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-098-customer-source.json"
+fi
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  jq -n \
+    --arg releaseCommit "$RELEASE_COMMIT" \
+    --arg image "$RELIABILITY_MIGRATION_IMAGE" \
+    '{status:"applied_and_verified",migration:"099_module025_sow_gsd_workspace",releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-099.json"
+fi
+
+if [[ -n "$EVIDENCE_ROOT" ]]; then
+  jq -n \
+    --arg releaseCommit "$RELEASE_COMMIT" \
+    --arg image "$RELIABILITY_MIGRATION_IMAGE" \
+    '{status:"applied_and_verified",migration:"100_module001b_catalog_ownership_reconciliation",releaseCommit:$releaseCommit,image:$image,environment:"protected-test",privateNetworkJob:true,productionMutation:false}' \
+    > "$EVIDENCE_ROOT/migration-100.json"
+fi

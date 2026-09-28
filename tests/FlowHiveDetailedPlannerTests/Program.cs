@@ -1,0 +1,1432 @@
+using System.Collections.Concurrent;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using ClosedXML.Excel;
+using ProjectTime.Api.Ai;
+using ProjectTime.Api.Modules;
+using UglyToad.PdfPig;
+
+if (args.Length > 0 && args[0] == "--qualify-sow-provider")
+{
+    if (args.Length is < 2 or > 3 || (args.Length == 3 && args[2] != "--use-module064-store"))
+        throw new ArgumentException("Use --qualify-sow-provider claude|openai [--use-module064-store].");
+    await Module025ProviderQualification.RunAsync(args[1], args.Length == 3);
+    return;
+}
+
+static void Assert(bool condition, string label)
+{
+    if (!condition) throw new InvalidOperationException($"ASSERTION_FAILED {label}");
+    Console.WriteLine($"ASSERTION_PASSED {label}");
+}
+
+static string NormalizePdfText(string value) => string.Join(
+    ' ',
+    value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+Assert(
+    PulseAiPrivateRagService.MaximumOutputTokensForPlanning(
+        CelarAiCapabilityCatalog.ProjectFlowHivePlan,
+        4_000) == 12_000,
+    "flowhive_detailed_plan_output_budget_not_default_rag_budget");
+Assert(
+    PulseAiPrivateRagService.MaximumAnswerCharactersForPlanning(
+        CelarAiCapabilityCatalog.ProjectFlowHivePlan,
+        24_000) == 96_000,
+    "flowhive_detailed_plan_answer_limit_not_default_rag_limit");
+var ragServiceType = typeof(PulseAiPrivateRagService);
+var privateTimeout = (string name) => (TimeSpan)ragServiceType
+    .GetField(name, BindingFlags.NonPublic | BindingFlags.Static)!
+    .GetValue(null)!;
+Assert(
+    privateTimeout("Module025AuthoritativeGenerationTimeout") == TimeSpan.FromMinutes(40)
+        && privateTimeout("Module025AuthoritativePhaseTimeout") == TimeSpan.FromMinutes(8),
+    "module025_authoritative_sow_budget_allows_slow_private_phases_with_outer_bound");
+Assert(
+    privateTimeout("FlowHiveGenerationTimeout") == TimeSpan.FromMinutes(40)
+        && privateTimeout("FlowHivePhaseTimeout") == TimeSpan.FromMinutes(10),
+    "flowhive_planner_phase_timeout_remains_bounded");
+var flowHivePhaseOutputTokens = (int)ragServiceType
+    .GetField("FlowHivePhaseMaximumOutputTokens", BindingFlags.NonPublic | BindingFlags.Static)!
+    .GetValue(null)!;
+Assert(
+    flowHivePhaseOutputTokens == 1_280,
+    "flowhive_phase_response_budget_matches_compact_two_task_contract");
+var flowHiveBatchOutputTokens = (int)ragServiceType
+    .GetField("FlowHiveBatchMaximumOutputTokens", BindingFlags.NonPublic | BindingFlags.Static)!
+    .GetValue(null)!;
+Assert(
+    flowHiveBatchOutputTokens == 1_280,
+    "flowhive_single_batch_response_budget_fits_single_slot_runtime");
+var flowHiveBatchSourceMaximumCharacters = (int)ragServiceType
+    .GetField("FlowHiveBatchSourceMaximumCharacters", BindingFlags.NonPublic | BindingFlags.Static)!
+    .GetValue(null)!;
+Assert(
+    flowHiveBatchSourceMaximumCharacters == 3_000,
+    "flowhive_single_batch_source_budget_fits_live_provider_window");
+Assert(
+    PulseAiPrivateRagService.MaximumOutputTokensForPlanning(
+        CelarAiCapabilityCatalog.ProjectFlowHivePlan,
+        16_000) == 16_000,
+    "flowhive_configured_output_budget_is_not_reduced");
+Assert(
+    PulseAiPrivateRagService.MaximumOutputTokensForPlanning(
+        PulseAiPrivateRagPolicy.TimesheetFeature,
+        4_000) == 4_000,
+    "ordinary_private_rag_output_budget_is_unchanged");
+Assert(
+    PulseAiPrivateRagService.ShouldGenerateBoundedPhasePlan(flowHive: true, hasAuthoritativeScope: false),
+    "flowhive_planner_uses_bounded_phase_generation");
+Assert(
+    !PulseAiPrivateRagService.ShouldGenerateBoundedPhasePlan(flowHive: false, hasAuthoritativeScope: false),
+    "ordinary_private_rag_does_not_use_planner_phase_generation");
+Assert(
+    PulseAiPrivateRagService.ShouldGenerateBoundedPhasePlan(flowHive: false, hasAuthoritativeScope: true),
+    "module025_authoritative_scope_uses_bounded_phase_generation");
+Assert(
+    PulseAiPrivateRagService.ShouldUseFlowHiveBatchGeneration(flowHive: true),
+    "flowhive_authoritative_sow_keeps_single_batch_transport");
+Assert(
+    !PulseAiPrivateRagService.ShouldUseFlowHiveBatchGeneration(flowHive: false),
+    "module025_authoritative_sow_keeps_phase_transport");
+
+var flowHiveInstructionFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "FlowHiveSystemInstruction",
+    BindingFlags.NonPublic | BindingFlags.Static);
+Assert(flowHiveInstructionFactory is not null, "flowhive_system_instruction_available");
+var flowHiveInstruction = (string)flowHiveInstructionFactory!.Invoke(
+    null,
+    [CelarAiCapabilityCatalog.SowGsdPlanning, true])!;
+Assert(flowHiveInstruction.Contains("normally 10 to 20 tasks, with multiple tasks per phase where the work requires them", StringComparison.Ordinal),
+    "module025_prompt_preserves_detailed_output_contract");
+Assert(flowHiveInstruction.Contains("at least two tasks for every phase and at least ten tasks total", StringComparison.Ordinal),
+    "module025_prompt_preserves_phase_floor");
+
+var module025PhaseInstructionFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "Module025PhaseSystemInstruction",
+    BindingFlags.NonPublic | BindingFlags.Static);
+Assert(module025PhaseInstructionFactory is not null, "module025_phase_instruction_available");
+var module025PhaseInstruction = (string)module025PhaseInstructionFactory!.Invoke(
+    null,
+    [flowHiveInstruction, "Validate", 3, "[]", "", 1_280])!;
+Assert(module025PhaseInstruction.Contains("exactly two detailed tasks for this phase", StringComparison.Ordinal),
+    "module025_phase_prompt_is_bounded");
+Assert(module025PhaseInstruction.Contains("Return exactly two distinct detailed tasks for the requested phase only", StringComparison.Ordinal),
+    "module025_phase_prompt_preserves_distinct_task_contract");
+Assert(module025PhaseInstruction.Contains("1280 output tokens", StringComparison.Ordinal),
+    "module025_phase_prompt_matches_completion_budget");
+Assert(module025PhaseInstruction.Contains("This is phase 4 of five", StringComparison.Ordinal),
+    "module025_phase_prompt_binds_phase_index");
+
+var module025Parser = typeof(PulseAiPrivateRagService).GetMethod(
+    "ParseModule025DetailedPlan",
+    BindingFlags.NonPublic | BindingFlags.Static);
+Assert(module025Parser is not null, "module025_detailed_parser_available");
+
+var module025Source = new PulseAiPrivateRetrievedChunk(
+    ChunkId: "module025-service-overview",
+    DocumentVersionId: Guid.NewGuid(),
+    DocumentId: Guid.NewGuid(),
+    ProjectId: null,
+    ProjectCode: "SOW-TEST-025",
+    ProjectName: "Module 025 detailed parser test",
+    CustomerName: "Test customer",
+    DocumentCategory: "module025_service_overview",
+    DocumentVersion: "revision-1",
+    Classification: "internal",
+    OriginalFileName: "Saved Service Overview",
+    CitationAnchor: "Module 025 Service Overview",
+    PageNumber: null,
+    SheetName: null,
+    SectionTitle: "Service Overview",
+    Text: "Upgrade Cisco Unified Communications Manager from version 14.0 to version 15.0.",
+    SourceSha256: new string('a', 64),
+    TextSha256: new string('b', 64),
+    LexicalScore: 1m,
+    SemanticScore: 1m,
+    CombinedScore: 1m,
+    ProcessedAt: DateTimeOffset.UtcNow,
+    RankOrder: 1,
+    SourceType: "module025_saved_service_overview",
+    SourceModule: "025");
+var module025Retrieval = new PulseAiPrivateRetrievalResult(
+    Status: "completed",
+    RetrievalMode: "module025_saved_service_overview",
+    ResolvedProjectId: null,
+    ResolvedProjectCode: "SOW-TEST-025",
+    ResolvedProjectName: "Module 025 detailed parser test",
+    CandidateCount: 1,
+    AuthorizedCandidateCount: 1,
+    Chunks: [module025Source],
+    MissingEvidence: [],
+    Conflicts: [],
+    CoverageScore: 1m,
+    DataAsOf: DateTimeOffset.UtcNow,
+    DiagnosticCode: string.Empty);
+
+var boundedSourceFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "BoundModule025PhaseRetrieval", BindingFlags.NonPublic | BindingFlags.Static);
+Assert(boundedSourceFactory is not null, "module025_phase_source_bounding_available");
+var longServiceOverview = string.Join(
+    "\n\n",
+    Enumerable.Range(0, 1_200).Select(index =>
+        $"Scope item {index}: the customer requires architecture, integration, implementation, validation, release handoff, and acceptance evidence for the authorized delivery boundary."));
+var longModule025Source = module025Source with
+{
+    Text = longServiceOverview,
+    SourceSha256 = new string('c', 64),
+    TextSha256 = new string('d', 64)
+};
+var longModule025Retrieval = module025Retrieval with { Chunks = [longModule025Source] };
+var boundedDesignRetrieval = (PulseAiPrivateRetrievalResult)boundedSourceFactory!.Invoke(
+    null,
+    [longModule025Retrieval, "Design", 1])!;
+Assert(boundedDesignRetrieval.Chunks.Single().Text.Length <= 8_000,
+    "module025_phase_source_is_bounded_for_private_runtime");
+Assert(boundedDesignRetrieval.Chunks.Single().SourceSha256 == longModule025Source.SourceSha256
+       && boundedDesignRetrieval.Chunks.Single().TextSha256 == longModule025Source.TextSha256,
+    "module025_phase_source_hashes_remain_bound_to_full_saved_scope");
+Assert(boundedDesignRetrieval.Chunks.Single().Text.Contains("architecture", StringComparison.OrdinalIgnoreCase),
+    "module025_phase_source_retains_phase_relevant_scope");
+var secondLongModule025Source = longModule025Source with
+{
+    ChunkId = "module025-service-overview-2",
+    RankOrder = 2,
+    TextSha256 = new string('e', 64)
+};
+var boundedMultiRetrieval = (PulseAiPrivateRetrievalResult)boundedSourceFactory.Invoke(
+    null,
+    [longModule025Retrieval with { Chunks = [longModule025Source, secondLongModule025Source] }, "Validate", 3])!;
+Assert(boundedMultiRetrieval.Chunks.Sum(chunk => chunk.Text.Length) <= 8_000,
+    "module025_multi_source_phase_budget_is_aggregate");
+Assert(boundedMultiRetrieval.Chunks.Any(chunk => chunk.RankOrder == 1),
+    "module025_multi_source_phase_keeps_primary_citation");
+var flowHiveBatchSourceFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "BoundModule025BatchRetrieval", BindingFlags.NonPublic | BindingFlags.Static);
+Assert(flowHiveBatchSourceFactory is not null, "flowhive_single_batch_source_bounding_available");
+var flowHiveBatchRetrieval = (PulseAiPrivateRetrievalResult)flowHiveBatchSourceFactory!.Invoke(
+    null,
+    [longModule025Retrieval, 4_000])!;
+Assert(flowHiveBatchRetrieval.Chunks.Sum(chunk => chunk.Text.Length) <= 4_000,
+    "flowhive_single_batch_source_budget_is_compact");
+Assert(flowHiveBatchRetrieval.Chunks.Single().SourceSha256 == longModule025Source.SourceSha256
+       && flowHiveBatchRetrieval.Chunks.Single().TextSha256 == longModule025Source.TextSha256,
+    "flowhive_single_batch_source_hashes_remain_bound_to_full_scope");
+var mediumFlowHiveSource = longModule025Source with
+{
+    Text = string.Join(
+        "\n\n",
+        Enumerable.Range(0, 90).Select(index =>
+            $"Scope item {index}: the authorized customer delivery requires architecture, integration, implementation, validation, and release evidence."))
+};
+var mediumFlowHiveRetrieval = longModule025Retrieval with { Chunks = [mediumFlowHiveSource] };
+var boundedMediumFlowHiveRetrieval = (PulseAiPrivateRetrievalResult)flowHiveBatchSourceFactory.Invoke(
+    null,
+    [mediumFlowHiveRetrieval, 4_000])!;
+Assert(boundedMediumFlowHiveRetrieval.Chunks.Sum(chunk => chunk.Text.Length) <= 4_000,
+    "flowhive_single_batch_bounds_sources_between_phase_and_full_document_limits");
+
+var module025Phases = new[] { "Planning", "Architecture and Design", "Implementation", "Testing and Validation", "Operational Handoff" };
+var module025Payload = JsonSerializer.Serialize(new
+{
+    summary = "Upgrade Cisco Unified Communications Manager from version 14.0 to 15.0 through a controlled readiness, architecture, implementation, validation, and operational transition that keeps customer decisions and unknown environment facts explicit.",
+    phases = module025Phases.Select((phase, phaseIndex) => new
+    {
+        name = phase,
+        acceptance = new[] { $"The customer and delivery reviewers can trace the {phase.ToLowerInvariant()} phase to retained evidence and its completion decision." },
+        tests = new[] { $"Review the retained {phase.ToLowerInvariant()} evidence and confirm that the expected result and decision gate are recorded." },
+        customerActions = new[] { "Provide environment facts, authorized access, decisions, and acceptance participation through the approved project process." },
+        providerResponsibilities = new[] { "Perform the reviewed technical procedure, protect credentials, retain evidence, and escalate deviations before expanding scope." },
+        readinessRequirements = new[] { "Required approvals, inputs, access, backup or rollback evidence, and customer contacts are available before work begins." },
+        riskConsiderations = new[] { "Unsupported compatibility, missing entitlement, unavailable access, or an unapproved change condition can pause delivery and require replanning." },
+        customerDecisions = new[] { "Confirm the actual CUCM topology, installed options, target compatibility, licensing entitlement, and approved change window." },
+        workPackages = Enumerable.Range(1, 2).Select(packageIndex => new
+        {
+            wbsNumber = $"{phaseIndex + 1}.{packageIndex}",
+            title = $"{phase} CUCM work package {packageIndex}",
+            outcome = $"Complete technology-specific {phase.ToLowerInvariant()} work package {packageIndex} for Cisco Unified Communications Manager 14.0 to 15.0, record the customer-visible evidence, and stop at the documented decision gate when a customer topology, compatibility, licensing, access, or maintenance-window fact remains unresolved.",
+            hours = 8 + phaseIndex + packageIndex,
+            roles = new[] { "Cisco Collaboration Engineer", "Solution Architect" },
+            dependsOn = phaseIndex == 0 && packageIndex == 1 ? Array.Empty<string>() : new[] { $"{Math.Max(1, phaseIndex)}.{packageIndex}" },
+            assumption = true,
+            steps = new object[]
+            {
+                new { text = $"Inspect the approved CUCM inputs for {phase.ToLowerInvariant()} work package {packageIndex}, record the observed result, and resolve or document every blocking discrepancy before proceeding." },
+                $"Execute the reviewed {phase.ToLowerInvariant()} procedure for work package {packageIndex}, retain objective before-and-after evidence, and verify the stated completion condition."
+            },
+            requiredInputs = new[] { "Customer-approved CUCM inventory, compatibility evidence, access plan, and change constraints." },
+            deliverables = new[] { $"Documented {phase.ToLowerInvariant()} output and evidence package {packageIndex}." },
+            acceptance = packageIndex == 1
+                ? new[] { $"Record the task-specific completion decision for {phase.ToLowerInvariant()} work package {packageIndex}." }
+                : Array.Empty<string>(),
+            customerActions = packageIndex == 1
+                ? new[] { $"Confirm the task-specific customer decision for {phase.ToLowerInvariant()} work package {packageIndex}." }
+                : Array.Empty<string>()
+        })
+    }),
+    milestones = new[]
+    {
+        new
+        {
+            name = "CUCM production upgrade decision gate",
+            description = "Confirm that the Cisco Unified Communications Manager production cluster is ready for the approved upgrade window and that every blocking readiness condition has a documented disposition.",
+            proposedTiming = "After readiness and design approval, before production implementation begins.",
+            acceptanceEvidence = new[] { "Approved readiness record, implementation decision, rollback authority, and customer change-window confirmation are retained." },
+            assumption = true
+        }
+    },
+    roles = new[] { "Solution Architect", "Cisco Collaboration Engineer", "Project Manager" },
+    assumptions = new[] { "Technical procedures and effort remain proposals until the Solution Architect validates the customer environment." },
+    risks = new[] { "Unsupported components or unresolved customer prerequisites can prevent a safe upgrade." },
+    outOfScope = new[] { "Work outside the confirmed CUCM upgrade boundary requires separate review and approval." },
+    questions = new[] { "What is the confirmed customer topology, node count, licensing state, integration inventory, and maintenance window?" },
+    conflicts = Array.Empty<string>(),
+    confidence = 0.82m,
+    confidenceExplanation = "The saved Service Overview establishes the requested upgrade boundary; customer-specific facts still require validation."
+});
+
+var parsedModule025 = module025Parser!.Invoke(
+    null,
+    new object?[] { module025Payload, module025Retrieval }) as PulseAiPrivateFlowHivePlan;
+Assert(parsedModule025 is not null, "module025_grouped_work_packages_parse");
+Assert(parsedModule025!.Tasks.Count == 10, "module025_ten_detailed_work_packages_preserved");
+foreach (var phase in new[] { "Plan", "Design", "Implement", "Validate", "Release" })
+{
+    Assert(parsedModule025.Tasks.Count(task => task.Phase == phase) == 2, $"module025_{phase.ToLowerInvariant()}_coverage");
+}
+
+var phaseLocalWbsPlans = new List<PulseAiPrivateFlowHivePlan>();
+foreach (var phase in new[] { "Plan", "Design", "Implement", "Validate", "Release" })
+{
+    var phaseTasks = parsedModule025.Tasks
+        .Where(task => task.Phase == phase)
+        .Select((task, index) => task with
+        {
+            // A provider may restart WBS numbering inside each bounded phase
+            // response. Assembly, not the model, owns global proposal identity.
+            Wbs = $"1.{index + 1}",
+            Predecessors = index == 1 ? ["1.1"] : []
+        })
+        .ToArray();
+    phaseLocalWbsPlans.Add(parsedModule025 with { Tasks = phaseTasks });
+}
+var assembledPhaseLocalWbs = PulseAiPrivateRagService.AssembleModule025PhasePlans(phaseLocalWbsPlans);
+Assert(assembledPhaseLocalWbs.Tasks.Select(task => task.Wbs).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+       == assembledPhaseLocalWbs.Tasks.Count,
+    "module025_phase_local_wbs_is_normalized_without_duplicate_proposal_ids");
+Assert(assembledPhaseLocalWbs.Tasks.Count(task => task.Phase == "Plan" && task.Wbs == "1.1") == 1
+       && assembledPhaseLocalWbs.Tasks.Count(task => task.Phase == "Design" && task.Wbs == "2.1") == 1
+       && assembledPhaseLocalWbs.Tasks.Count(task => task.Phase == "Release" && task.Wbs == "5.2") == 1,
+    "module025_phase_local_wbs_receives_deterministic_phase_scope");
+Assert(assembledPhaseLocalWbs.Tasks
+        .Where(task => task.Phase == "Design" && task.Wbs == "2.2")
+        .SelectMany(task => task.Predecessors)
+        .Contains("1.1", StringComparer.OrdinalIgnoreCase),
+    "module025_phase_local_predecessor_resolves_to_prior_phase");
+Assert(parsedModule025.Tasks.All(task => task.CitationIds.SequenceEqual(new[] { 1 })), "module025_server_authorized_citation_bound");
+Assert(parsedModule025.Tasks.All(task => task.EstimatedDurationDays > 0m && task.EstimatedHours is > 0m), "module025_duration_and_effort_normalized");
+Assert(parsedModule025.Tasks.All(task => (task.DetailedSteps?.Count ?? 0) >= 2), "module025_structured_and_string_steps_preserved");
+Assert(parsedModule025.Tasks.All(task => (task.CustomerResponsibilities?.Count ?? 0) > 0), "module025_phase_level_responsibilities_inherited");
+Assert(parsedModule025.Tasks.All(task => (task.AcceptanceCriteria?.Count ?? 0) > 0), "module025_phase_level_acceptance_inherited");
+Assert(parsedModule025.Tasks.First().CustomerResponsibilities!.Count == 2, "module025_task_and_phase_responsibilities_merged");
+Assert(parsedModule025.Tasks.First().AcceptanceCriteria!.Count == 2, "module025_task_and_phase_acceptance_merged");
+Assert(parsedModule025.Tasks.All(task => (task.ValidationSteps?.Count ?? 0) > 0), "module025_every_task_has_validation");
+Assert(parsedModule025.Tasks.All(task => (task.Prerequisites?.Count ?? 0) > 0), "module025_every_task_has_prerequisites");
+Assert(parsedModule025.Tasks.All(task => (task.Risks?.Count ?? 0) > 0), "module025_every_task_has_risks");
+Assert(parsedModule025.Tasks.All(task => task.Description.Length >= 80), "module025_customer_ready_descriptions_preserved");
+Assert(parsedModule025.Milestones.Count == 1, "module025_model_milestone_preserved");
+Assert(parsedModule025.Milestones[0].CitationIds.SequenceEqual(new[] { 1 }), "module025_milestone_citation_bound");
+Assert(parsedModule025.Milestones[0].Name.Contains("CUCM", StringComparison.Ordinal), "module025_milestone_content_preserved");
+
+// Exercise the live-shaped orchestration with one bounded provider request per
+// phase. The five independent requests must run concurrently so a slow private
+// provider phase cannot queue the remaining phases behind the durable deadline.
+// Each response contains exactly two tasks; the server validates every phase and
+// owns deterministic WBS assembly.
+var phaseGenerator = typeof(PulseAiPrivateRagService).GetMethod(
+    "GenerateModule025PhasesAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
+var phaseRequest = new PulseAiPrivateModelRequest(CelarAiCapabilityCatalog.SowGsdPlanning,
+    "sow_draft", "comprehensive", "Return at least two tasks for every phase and at least ten tasks total.",
+    "Generate the requested service", [module025Source], "PulseAiPrivateFlowHivePlan", 12000, 0.05m, "phase-test");
+var phaseCalls = 0;
+var phaseNames = new[] { "Plan", "Design", "Implement", "Validate", "Release" };
+var phasePayloads = parsedModule025.Tasks
+    .GroupBy(task => task.Phase, StringComparer.Ordinal)
+    .ToDictionary(
+        group => group.Key,
+        group => JsonSerializer.Serialize(new
+        {
+            objective = $"Deliver the authorized {group.Key} work packages with source-linked review evidence.",
+            tasks = group.Select((task, index) => new
+            {
+                wbs = $"1.{index + 1}",
+                phase = group.Key,
+                name = task.Name,
+                description = task.Description,
+                estimatedHours = task.EstimatedHours,
+                estimatedDurationDays = task.EstimatedDurationDays,
+                requiredRoles = task.RequiredRoles,
+                predecessors = index == 1 ? new[] { "1.1" } : Array.Empty<string>(),
+                detailedSteps = task.DetailedSteps
+            })
+        }),
+        StringComparer.Ordinal);
+string PhaseFromRequest(PulseAiPrivateModelRequest request) =>
+    phaseNames.Single(phase => request.SystemInstruction.Contains($"ONLY {phase} tasks", StringComparison.Ordinal));
+Func<PulseAiPrivateModelRequest, CancellationToken, Task<PulseAiPrivateModelResult>> phaseModel = (request, token) =>
+{
+    Interlocked.Increment(ref phaseCalls);
+    var phase = PhaseFromRequest(request);
+    Assert(request.MaximumOutputTokens == 1_280, "module025_phase_completion_bounded");
+    Assert(request.SystemInstruction.Contains($"This is phase {Array.IndexOf(phaseNames, phase) + 1} of five", StringComparison.Ordinal),
+        "module025_phase_request_scoped");
+    Assert(request.Sources.Single() == module025Source, "module025_phase_source_authority_preserved");
+    var payload = phasePayloads[phase];
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        payload, 100, payload.Length, "", DateTimeOffset.UtcNow));
+};
+async Task<PulseAiPrivateModelResult> RunPhases(Func<PulseAiPrivateModelRequest, CancellationToken, Task<PulseAiPrivateModelResult>> model,
+    CancellationToken token = default,
+    PulseAiPrivateModelRequest? requestToRun = null,
+    PulseAiPrivateRetrievalResult? retrievalToRun = null) => await (Task<PulseAiPrivateModelResult>)phaseGenerator.Invoke(null,
+        new object[] { requestToRun ?? phaseRequest, retrievalToRun ?? module025Retrieval, model, token })!;
+// The Module025 production path uses full fields and sequential validation;
+// retain the compact-path fixtures below to protect existing FlowHive behavior.
+Assert(!PulseAiPrivateRagService.ShouldUseFlowHiveBatchGeneration(true, CelarAiCapabilityCatalog.SowGsdPlanning),
+    "module025_never_routes_to_compact_flowhive_batch");
+var detailedGenerator = typeof(PulseAiPrivateRagService).GetMethod(
+    "GenerateModule025DetailedPhasesAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
+async Task<PulseAiPrivateModelResult> RunDetailedPhases(
+    Func<PulseAiPrivateModelRequest, CancellationToken, Task<PulseAiPrivateModelResult>> model) =>
+    await (Task<PulseAiPrivateModelResult>)detailedGenerator.Invoke(null,
+        new object[] { phaseRequest, module025Retrieval, model, CancellationToken.None,
+            TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(10), null! })!;
+var detailedCalls = new List<string>();
+var activeDetailedCalls = 0;
+var detailedResult = await RunDetailedPhases(async (request, token) =>
+{
+    Assert(Interlocked.Increment(ref activeDetailedCalls) == 1, "module025_provider_requests_do_not_overlap");
+    var phase = PhaseFromRequest(request);
+    detailedCalls.Add(phase);
+    Assert(request.MaximumOutputTokens == 6144, "module025_detail_has_bounded_sufficient_output_budget");
+    Assert(!request.SystemInstruction.Contains("exactly two", StringComparison.OrdinalIgnoreCase),
+        "module025_scope_is_not_capped_at_two_tasks");
+    await Task.Delay(1, token);
+    var tasks = parsedModule025.Tasks.Where(task => task.Phase == phase).ToList();
+    // A third substantive work package must survive the entire assembly path.
+    tasks.Add(tasks[0] with { Wbs = $"{Array.IndexOf(phaseNames, phase) + 1}.3",
+        Name = $"Additional {phase} technical handoff", Description =
+        $"Verify the additional {phase} CUCM technical handoff against the authorized interface inventory and record the agreed evidence and ownership." });
+    var payload = JsonSerializer.Serialize(new { objective = "Deliver authorized CUCM scope", tasks });
+    Interlocked.Decrement(ref activeDetailedCalls);
+    return new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        payload, 100, payload.Length, "", DateTimeOffset.UtcNow);
+});
+Assert(detailedResult.Succeeded && detailedCalls.SequenceEqual(phaseNames), "module025_full_phases_validate_in_order");
+var detailedPlan = (PulseAiPrivateFlowHivePlan)module025Parser.Invoke(null,
+    new object[] { detailedResult.Content, module025Retrieval })!;
+Assert(detailedPlan.Tasks.Count == 15, "module025_more_than_two_tasks_per_phase_preserved");
+Assert(detailedPlan.Tasks[0].AcceptanceCriteria!.SequenceEqual(parsedModule025.Tasks[0].AcceptanceCriteria!),
+    "module025_authored_acceptance_preserved_without_generic_filler");
+var incompleteCalls = 0;
+var incompleteResult = await RunDetailedPhases((request, token) =>
+{
+    incompleteCalls++;
+    var payload = phasePayloads[PhaseFromRequest(request)];
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        payload, 100, payload.Length, "", DateTimeOffset.UtcNow));
+});
+Assert(!incompleteResult.Succeeded && incompleteCalls == 2 && incompleteResult.Content.Length == 0,
+    "module025_missing_detail_repaired_once_then_stops_without_spending_on_later_phases");
+
+var phasedResult = await RunPhases(phaseModel);
+Assert(phasedResult.Succeeded && phaseCalls == 5, "module025_five_validated_phases_complete_in_bounded_provider_requests");
+var phasedPlan = (PulseAiPrivateFlowHivePlan)module025Parser.Invoke(null, new object[] { phasedResult.Content, module025Retrieval })!;
+Assert(phasedPlan.Tasks.Count == 10, "module025_assembled_contract_passes");
+var parallelStarted = 0;
+var parallelActive = 0;
+var parallelMaximum = 0;
+var parallelRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+var parallelResult = await RunPhases(async (request, token) =>
+{
+    var active = Interlocked.Increment(ref parallelActive);
+    while (true)
+    {
+        var observed = Volatile.Read(ref parallelMaximum);
+        if (observed >= active || Interlocked.CompareExchange(ref parallelMaximum, active, observed) == observed) break;
+    }
+    if (Interlocked.Increment(ref parallelStarted) == phaseNames.Length) parallelRelease.TrySetResult(true);
+    try
+    {
+        await parallelRelease.Task.WaitAsync(token);
+        return new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+            phasePayloads[PhaseFromRequest(request)], 100, 100, "", DateTimeOffset.UtcNow);
+    }
+    finally
+    {
+        Interlocked.Decrement(ref parallelActive);
+    }
+});
+Assert(parallelResult.Succeeded && parallelStarted == 5 && parallelMaximum == 5,
+    "module025_phases_execute_concurrently_with_bounded_fanout");
+var compactBatchResult = await RunPhases((request, token) =>
+{
+    var phase = PhaseFromRequest(request);
+    Assert(request.MaximumOutputTokens == 1_280, "module025_compact_phase_completion_budget");
+    var compactBatchPayload = phasePayloads[phase];
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        compactBatchPayload, 100, compactBatchPayload.Length, "", DateTimeOffset.UtcNow));
+});
+var compactPlan = (PulseAiPrivateFlowHivePlan)module025Parser.Invoke(null, new object[] { compactBatchResult.Content, module025Retrieval })!;
+Assert(compactBatchResult.Succeeded && compactPlan.Tasks.Count == 10,
+    "module025_compact_provider_contract_completes");
+Assert(compactPlan.Tasks.All(task =>
+        (task.Inputs?.Count ?? 0) > 0
+        && (task.Outputs?.Count ?? 0) > 0
+        && (task.AcceptanceCriteria?.Count ?? 0) > 0
+        && (task.ValidationSteps?.Count ?? 0) > 0
+        && (task.CustomerResponsibilities?.Count ?? 0) > 0
+        && (task.UsSignalResponsibilities?.Count ?? 0) > 0
+        && (task.Prerequisites?.Count ?? 0) > 0
+        && (task.Risks?.Count ?? 0) > 0),
+    "module025_compact_provider_fields_are_server_completed_per_task");
+var boundedBatchCalls = 0;
+var boundedBatchResult = await RunPhases((request, token) =>
+{
+    boundedBatchCalls++;
+    Assert(request.Sources.Single().Text.Length <= 8_000,
+        "module025_batch_request_does_not_forward_full_service_overview");
+    Assert(request.Sources.Single().TextSha256 == longModule025Source.TextSha256,
+        "module025_batch_request_preserves_full_scope_text_hash");
+    var phasePayload = phasePayloads[PhaseFromRequest(request)];
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        phasePayload, 100, phasePayload.Length, "", DateTimeOffset.UtcNow));
+},
+    requestToRun: phaseRequest with { Sources = [longModule025Source] },
+    retrievalToRun: longModule025Retrieval);
+Assert(boundedBatchResult.Succeeded && boundedBatchCalls == 5,
+    "module025_bounded_source_phases_complete_without_losing_citations");
+var invalidCalls = 0;
+var invalidResult = await RunPhases((request, token) =>
+{
+    invalidCalls++;
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        "{\"tasks\":[]}", 100, 12, "", DateTimeOffset.UtcNow));
+});
+Assert(!invalidResult.Succeeded && invalidCalls == 10 && invalidResult.Content.Length == 0,
+    "module025_invalid_phase_has_no_draft_or_unbounded_retry_loop");
+var refusalCalls = 0;
+var refusalResult = await RunPhases((request, token) =>
+{
+    refusalCalls++;
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_refused", "celar_ai", "test-model",
+        "", 100, 0, "private_model_safety_refusal", DateTimeOffset.UtcNow));
+});
+Assert(!refusalResult.Succeeded && refusalCalls == 5 && refusalResult.Status == "private_model_refused",
+    "module025_refusal_batch_terminal");
+var transientCalls = 0;
+var transientAttempts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+var transientResult = await RunPhases((request, token) =>
+{
+    Interlocked.Increment(ref transientCalls);
+    var phase = PhaseFromRequest(request);
+    var attempt = transientAttempts.AddOrUpdate(phase, 1, (_, count) => count + 1);
+    return Task.FromResult(attempt == 1
+        ? new PulseAiPrivateModelResult("private_model_failed", "celar_ai", "test-model",
+            "", 100, 0, "private_model_http_502", DateTimeOffset.UtcNow)
+        : new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+            phasePayloads[phase], 100, 100, "", DateTimeOffset.UtcNow));
+});
+Assert(transientResult.Succeeded && transientCalls == 10
+        && transientAttempts.Values.All(attempts => attempts == 2),
+    "module025_transient_phase_failure_has_one_bounded_retry_per_phase");
+var deadlineCalls = 0;
+var deadlineResult = await RunPhases((request, token) =>
+{
+    deadlineCalls++;
+    return Task.FromResult(deadlineCalls == 1
+        ? new PulseAiPrivateModelResult("private_model_failed", "celar_ai", "test-model", "", 100, 0, "provider_deadline_exceeded", DateTimeOffset.UtcNow)
+        : new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model", phasePayloads[PhaseFromRequest(request)], 100, 100, "", DateTimeOffset.UtcNow));
+});
+Assert(deadlineResult.Succeeded && deadlineCalls == 6,
+    "module025_provider_deadline_has_one_phase_retry_without_unbounded_loop");
+
+// The installed candidate proved that Task.WhenAll is not enough: the Celar AI
+// runtime serialized five concurrent HTTP requests behind one provider slot.
+// FlowHive therefore uses one bounded five-phase response and keeps the same
+// server-owned validation/assembly gate. This test models a one-slot provider,
+// verifies there is exactly one model call, and rejects an incomplete response
+// without publishing a partial plan.
+var flowHiveBatchGenerator = typeof(PulseAiPrivateRagService).GetMethod(
+    "GenerateFlowHiveBatchCoreAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
+var flowHiveBatchInstructionFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "FlowHiveBatchSystemInstruction", BindingFlags.NonPublic | BindingFlags.Static)!;
+var compactFlowHiveSystemInstruction = (string)flowHiveBatchInstructionFactory.Invoke(
+    null, ["The prior full planner instruction must not be copied into the live batch."])!;
+Assert(compactFlowHiveSystemInstruction.Length <= 1_800,
+    "flowhive_live_batch_system_prompt_is_compact");
+Assert(compactFlowHiveSystemInstruction.Contains("15 to 25 ordered executable tasks", StringComparison.Ordinal)
+       && compactFlowHiveSystemInstruction.Contains("Do NOT generate separate", StringComparison.Ordinal)
+       && compactFlowHiveSystemInstruction.Contains("untrusted", StringComparison.Ordinal)
+       && compactFlowHiveSystemInstruction.Contains("citationId", StringComparison.Ordinal),
+    "flowhive_live_batch_system_prompt_keeps_source_safety_and_whole_wbs_contract");
+Assert(!compactFlowHiveSystemInstruction.Contains("Automatically populate every task field", StringComparison.Ordinal)
+       && !compactFlowHiveSystemInstruction.Contains("normally 10 to 20 tasks", StringComparison.Ordinal),
+    "flowhive_live_batch_system_prompt_does_not_forward_full_planner_instructions");
+var flowHiveBatchUserInstructionFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "FlowHiveBatchUserInstruction", BindingFlags.NonPublic | BindingFlags.Static)!;
+var compactFlowHiveUserInstruction = (string)flowHiveBatchUserInstructionFactory.Invoke(
+    null, [new string('x', 8_000)])!;
+Assert(compactFlowHiveUserInstruction.Length <= 320,
+    "flowhive_live_batch_user_prompt_is_compact_and_does_not_duplicate_scope_instructions");
+var flowHiveBatchRepairInstructionFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "FlowHiveBatchRepairSystemInstruction", BindingFlags.NonPublic | BindingFlags.Static)!;
+var compactFlowHiveRepairInstruction = (string)flowHiveBatchRepairInstructionFactory.Invoke(null, [])!;
+Assert(compactFlowHiveRepairInstruction.Contains("15 to 25 ordered objects", StringComparison.Ordinal)
+       && compactFlowHiveRepairInstruction.Contains("T01", StringComparison.Ordinal)
+       && compactFlowHiveRepairInstruction.Contains("predecessors", StringComparison.Ordinal)
+       && !compactFlowHiveRepairInstruction.Contains("1.1 Plan", StringComparison.Ordinal),
+    "flowhive_batch_structural_repair_preserves_whole_wbs_contract");
+var flowHiveBatchRepairUserFactory = typeof(PulseAiPrivateRagService).GetMethod(
+    "FlowHiveBatchRepairUserInstruction", BindingFlags.NonPublic | BindingFlags.Static)!;
+Assert(((string)flowHiveBatchRepairUserFactory.Invoke(null, [])!).Length <= 220,
+    "flowhive_batch_structural_repair_user_prompt_is_bounded");
+var flowHiveBatchRequest = phaseRequest with
+{
+    FeatureCode = CelarAiCapabilityCatalog.ProjectFlowHivePlan,
+    PurposeCode = "flowhive_detailed_plan",
+    SystemInstruction = "Return at least two tasks for every phase and at least ten tasks total.",
+    UserInstruction = "Create a detailed FlowHive plan from the authorized SOW.",
+    MaximumOutputTokens = 12_000,
+    CorrelationId = "flowhive-batch-capacity-test"
+};
+var flowHiveBatchPayload = JsonSerializer.Serialize(new
+{
+    objective = "Create a reviewable source-grounded project plan from current authorized evidence.",
+    tasks = Enumerable.Range(1, 15).Select(index => new
+    {
+        id = $"T{index:00}",
+        name = $"Authorized project work package {index:00}",
+        description = $"Complete authorized source-grounded project work package {index:00}, preserve objective evidence, and stop for review if a required project fact remains unresolved.",
+        estimatedHours = index is >= 7 and <= 9 ? 8m : 4m,
+        estimatedDurationDays = 1m,
+        requiredRoles = new[] { "Engineer", "Project Manager" },
+        predecessors = index == 1 ? Array.Empty<string>() : new[] { $"T{index - 1:00}" },
+        citationId = 1
+    })
+});
+var flowHiveBatchCalls = 0;
+var flowHiveBatchActive = 0;
+var flowHiveBatchMaximum = 0;
+async Task<PulseAiPrivateModelResult> RunFlowHiveBatch(
+    Func<PulseAiPrivateModelRequest, CancellationToken, Task<PulseAiPrivateModelResult>> model,
+    TimeSpan timeout = default)
+{
+    var effectiveTimeout = timeout == default ? TimeSpan.FromSeconds(5) : timeout;
+    return await (Task<PulseAiPrivateModelResult>)flowHiveBatchGenerator.Invoke(null,
+        new object?[] { flowHiveBatchRequest, module025Retrieval, model, CancellationToken.None, effectiveTimeout, null })!;
+}
+var flowHiveBatchResult = await RunFlowHiveBatch(async (request, token) =>
+{
+    var active = Interlocked.Increment(ref flowHiveBatchActive);
+    flowHiveBatchCalls++;
+    flowHiveBatchMaximum = Math.Max(flowHiveBatchMaximum, active);
+    Assert(request.MaximumOutputTokens == 1_280, "flowhive_single_batch_output_budget_is_bounded");
+    Assert(!request.SystemInstruction.Contains("ONLY Plan tasks", StringComparison.Ordinal),
+        "flowhive_single_batch_does_not_scope_to_one_phase");
+    Assert(request.UserInstruction.Contains("one complete executable project WBS", StringComparison.Ordinal),
+        "flowhive_single_batch_prompt_is_explicit");
+    Assert(!request.SystemInstruction.Contains("detailedSteps", StringComparison.Ordinal)
+           && request.SystemInstruction.Contains("Each task must contain only:", StringComparison.Ordinal)
+           && request.SystemInstruction.Contains("estimatedHours", StringComparison.Ordinal),
+        "flowhive_single_batch_provider_contract_omits_server_completed_fields");
+    Assert(request.Sources.Single().Text.Length <= 3_000,
+        "flowhive_single_batch_source_is_bounded_for_live_provider_window");
+    Assert(request.Sources.Single() == module025Source, "flowhive_single_batch_source_authority_preserved");
+    await Task.Yield();
+    Interlocked.Decrement(ref flowHiveBatchActive);
+    return new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        flowHiveBatchPayload, 100, flowHiveBatchPayload.Length, "", DateTimeOffset.UtcNow);
+});
+Assert(flowHiveBatchResult.Succeeded && flowHiveBatchCalls == 1 && flowHiveBatchMaximum == 1,
+    "flowhive_one_slot_provider_uses_one_model_request");
+var flowHiveBatchPlan = (PulseAiPrivateFlowHivePlan)module025Parser.Invoke(
+    null, new object[] { flowHiveBatchResult.Content, module025Retrieval })!;
+Assert(flowHiveBatchPlan.Tasks.Count == 15
+       && flowHiveBatchPlan.Tasks.Select(task => task.Wbs).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 15,
+    "flowhive_single_batch_assembles_fifteen_unique_work_packages");
+Assert(flowHiveBatchPlan.Tasks.Count(task => task.Phase == "Plan") == 3
+       && flowHiveBatchPlan.Tasks.Count(task => task.Phase == "Design") == 3
+       && flowHiveBatchPlan.Tasks.Count(task => task.Phase == "Implement") == 3
+       && flowHiveBatchPlan.Tasks.Count(task => task.Phase == "Validate") == 3
+       && flowHiveBatchPlan.Tasks.Count(task => task.Phase == "Release") == 3,
+    "flowhive_single_batch_server_categorizes_complete_wbs_for_display");
+var flowHiveInvalidBatchCalls = 0;
+var flowHiveInvalidBatch = await RunFlowHiveBatch((request, token) =>
+{
+    flowHiveInvalidBatchCalls++;
+    return Task.FromResult(new PulseAiPrivateModelResult(
+        "private_model_completed", "celar_ai", "test-model", "{\"tasks\":[]}",
+        100, 12, "", DateTimeOffset.UtcNow));
+});
+Assert(!flowHiveInvalidBatch.Succeeded && flowHiveInvalidBatchCalls == 2
+        && flowHiveInvalidBatch.Content.Length == 0
+        && flowHiveInvalidBatch.DiagnosticCode.EndsWith("_batch", StringComparison.Ordinal),
+    "flowhive_invalid_single_batch_has_no_partial_draft_or_unbounded_parse_loop");
+var flowHiveStructuralRepairCalls = 0;
+var flowHiveStructuralRepair = await RunFlowHiveBatch((request, token) =>
+{
+    flowHiveStructuralRepairCalls++;
+    return Task.FromResult(flowHiveStructuralRepairCalls == 1
+        ? new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model", "{\"tasks\":[]}",
+            100, 12, "", DateTimeOffset.UtcNow)
+        : new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+            flowHiveBatchPayload, 100, flowHiveBatchPayload.Length, "", DateTimeOffset.UtcNow));
+});
+Assert(flowHiveStructuralRepair.Succeeded && flowHiveStructuralRepairCalls == 2,
+    "flowhive_structural_repair_recovers_one_validated_missing-slot_response");
+var flowHiveRetryCalls = 0;
+var flowHiveRetry = await RunFlowHiveBatch((request, token) =>
+{
+    flowHiveRetryCalls++;
+    return Task.FromResult(flowHiveRetryCalls == 1
+        ? new PulseAiPrivateModelResult("private_model_failed", "celar_ai", "test-model", "", 100, 0,
+            "provider_deadline_exceeded", DateTimeOffset.UtcNow)
+        : new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+            flowHiveBatchPayload, 100, flowHiveBatchPayload.Length, "", DateTimeOffset.UtcNow));
+});
+Assert(!flowHiveRetry.Succeeded && flowHiveRetryCalls == 1
+       && flowHiveRetry.DiagnosticCode.EndsWith("_batch", StringComparison.Ordinal),
+    "flowhive_transient_batch_timeout_returns_immediately_to_source_grounded_failsafe");
+Assert(ProjectPlanningAiOrchestrator.IsRetryableProviderDiagnostic("provider_deadline_exceeded"),
+    "flowhive_provider_deadline_is_retryable_at_orchestrator_boundary");
+Assert(ProjectPlanningAiOrchestrator.IsRetryableProviderDiagnostic("private_module025_phase_deadline_exceeded_phase_design"),
+    "flowhive_phase_deadline_diagnostic_is_retryable_at_orchestrator_boundary");
+Assert(!ProjectPlanningAiOrchestrator.IsRetryableProviderDiagnostic("private_model_safety_refusal"),
+    "flowhive_safety_refusal_is_not_retryable_at_orchestrator_boundary");
+var phaseCore = typeof(PulseAiPrivateRagService).GetMethod(
+    "GenerateModule025PhasesCoreAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
+async Task<PulseAiPrivateModelResult> RunBoundedPhases(
+    Func<PulseAiPrivateModelRequest, CancellationToken, Task<PulseAiPrivateModelResult>> model,
+    TimeSpan total, TimeSpan phase, CancellationToken token = default) =>
+    await (Task<PulseAiPrivateModelResult>)phaseCore.Invoke(null,
+        new object?[] { phaseRequest, module025Retrieval, model, token, total, phase, null })!;
+using (var oneSlotProvider = new SemaphoreSlim(1, 1))
+{
+    var serializedProviderCalls = 0;
+    var serializedProviderMaximum = 0;
+    var serializedLegacyResult = await RunBoundedPhases(async (request, token) =>
+    {
+        Interlocked.Increment(ref serializedProviderCalls);
+        await oneSlotProvider.WaitAsync(token);
+        try
+        {
+            var active = 1;
+            serializedProviderMaximum = Math.Max(serializedProviderMaximum, active);
+            await Task.Delay(TimeSpan.FromMilliseconds(75), token);
+            return new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+                phasePayloads[PhaseFromRequest(request)], 100, 100, "", DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            oneSlotProvider.Release();
+        }
+    }, TimeSpan.FromMilliseconds(150), TimeSpan.FromSeconds(5));
+    Assert(!serializedLegacyResult.Succeeded && serializedProviderCalls >= 2
+        && serializedProviderMaximum == 1
+        && serializedLegacyResult.Content.Length == 0,
+        "legacy_five_request_fanout_exhausts_one_slot_provider_without_draft");
+}
+// A non-cooperative provider must not hold the worker or publish a partial plan.
+var blockedCalls = 0;
+var observedPhaseToken = CancellationToken.None;
+var phaseTimeoutResult = await RunBoundedPhases((request, token) => {
+    blockedCalls++;
+    observedPhaseToken = token;
+    return new TaskCompletionSource<PulseAiPrivateModelResult>().Task;
+}, TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(5));
+Assert(blockedCalls == 5 && observedPhaseToken.IsCancellationRequested
+    && phaseTimeoutResult.DiagnosticCode == "private_module025_generation_deadline_exceeded_phase_batch"
+    && phaseTimeoutResult.Content.Length == 0, "module025_hung_batch_cancelled_no_partial_draft");
+var totalTimeoutResult = await RunBoundedPhases((request, token) =>
+    new TaskCompletionSource<PulseAiPrivateModelResult>().Task,
+    TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(5));
+Assert(totalTimeoutResult.DiagnosticCode == "private_module025_generation_deadline_exceeded_phase_batch",
+    "module025_total_budget_is_distinct_from_phase_budget");
+var repairDeadlineCalls = 0;
+var repairDeadlineResult = await RunBoundedPhases(async (request, token) => {
+    repairDeadlineCalls++;
+    await Task.Delay(Timeout.Infinite, token);
+    return new PulseAiPrivateModelResult("private_model_completed", "celar_ai", "test-model",
+        phasePayloads["Plan"], 100, phasePayloads["Plan"].Length, "", DateTimeOffset.UtcNow);
+}, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(50));
+Assert(repairDeadlineCalls == 5 && repairDeadlineResult.DiagnosticCode == "private_module025_phase_deadline_exceeded",
+    "module025_phase_generation_obeys_phase_deadline");
+using (var shutdown = new CancellationTokenSource())
+{
+    shutdown.Cancel();
+    var propagated = false;
+    try
+    {
+        await RunBoundedPhases((request, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            return phaseModel(request, token);
+        }, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), shutdown.Token);
+    }
+    catch (OperationCanceledException) { propagated = true; }
+    Assert(propagated, "module025_host_cancellation_is_not_converted_to_generation_timeout");
+}
+var unauthorizedCalls = 0;
+var unauthorized = await RunPhases((request, token) =>
+{
+    unauthorizedCalls++;
+    return Task.FromResult(new PulseAiPrivateModelResult("private_model_failed", "celar_ai", "test-model",
+        "", 100, 0, "private_model_http_401", DateTimeOffset.UtcNow));
+});
+Assert(!unauthorized.Succeeded && unauthorizedCalls == 5, "module025_authentication_failure_not_retried_per_phase");
+var generationFailure = typeof(Module025SowGsdModule).GetMethod("GenerationFailureOutcome", BindingFlags.NonPublic | BindingFlags.Static)!;
+foreach (var (diagnostic, expectedHttp) in new[] {
+    ("private_model_http_502_private_runtime_unavailable_phase_design", 503),
+    ("private_module025_generation_deadline_exceeded", 503),
+    ("deepseek_timeout_phase_plan", 503),
+    ("deepseek_queue_busy_phase_design", 503),
+    ("deepseek_http_503", 503),
+    ("private_model_http_500_private_runtime_http_500", 503),
+    ("private_model_http_500_private_runtime_http_500_phase_implement", 503),
+    ("deepseek_http_500", 503),
+    ("deepseek_http_500_phase_validate", 503),
+    ("private_model_http_500_safety_refusal", 422),
+    ("deepseek_output_budget_exhausted_phase_plan", 422),
+    ("deepseek_http_401", 422),
+    ("private_module025_phase_deadline_exceeded_phase_plan", 503),
+    ("private_module025_detailed_plan_invalid_phase_coverage", 422),
+    ("private_model_safety_refusal", 422),
+    ("private_model_http_401", 422) })
+{
+    var outcome = generationFailure.Invoke(null, new object[] { diagnostic, "test-correlation" })!;
+    var type = outcome.GetType();
+    Assert((int)type.GetProperty("HttpStatus")!.GetValue(outcome)! == expectedHttp
+        && (string)type.GetProperty("DiagnosticCode")!.GetValue(outcome)! == diagnostic
+        && !(bool)type.GetProperty("Completed")!.GetValue(outcome)!,
+        "module025_runtime_failure_distinguished_from_evidence_failure_without_state_change");
+}
+var privateDiagnostic = typeof(Module025SowGsdModule).GetMethod("PrivateGenerationDiagnostic", BindingFlags.NonPublic | BindingFlags.Static)!;
+string Diagnostic(params ProjectPulseAiTargetDecision[] decisions) =>
+    (string)privateDiagnostic.Invoke(null, new object[] { decisions, "composition_failed" })!;
+Assert(Diagnostic(new("deepseek_v4", "failed", "deepseek_timeout"),
+    new("celar_ai", "skipped", "provider_circuit_open")) == "deepseek_timeout",
+    "module025_deepseek_failure_survives_skipped_celar");
+Assert(Diagnostic(new("deepseek_v4", "failed", "deepseek_timeout"),
+    new("celar_ai", "failed", "private_model_http_502")) == "private_model_http_502",
+    "module025_last_attempted_private_failure_is_reported");
+Assert(Diagnostic(new("deepseek_v4", "refused", "deepseek_safety_refusal"),
+    new("celar_ai", "failed", "private_model_http_502")) == "deepseek_safety_refusal",
+    "module025_refusal_remains_terminal");
+Assert(Diagnostic(new ProjectPulseAiTargetDecision("claude", "failed", "external_failure")) == "composition_failed",
+    "module025_external_checklist_failure_is_not_private_generation_failure");
+var responsePolicy = typeof(PulseAiPrivateModelClient).Assembly.GetType("ProjectTime.Api.Ai.PulseAiPrivateModelResponsePolicy")!;
+var failureDiagnostic = responsePolicy.GetMethod("RuntimeFailureDiagnosticAsync", BindingFlags.Public | BindingFlags.Static)!;
+foreach (var (errorBody, expected) in new[]
+{
+    ("{\"error\":{\"code\":\"private_runtime_response_invalid\"}}", "private_model_http_502_private_runtime_response_invalid"),
+    ("{\"error\":{\"code\":\"private customer prompt content\"}}", "private_model_http_502"),
+    ("<html>private proxy details</html>", "private_model_http_502")
+})
+{
+    using var response = new HttpResponseMessage(System.Net.HttpStatusCode.BadGateway) { Content = new StringContent(errorBody) };
+    var diagnostic = await (Task<string>)failureDiagnostic.Invoke(null, new object[] { response, CancellationToken.None })!;
+    Assert(diagnostic == expected, "module025_runtime_diagnostic_closed_allowlist");
+}
+using (var cancelled = new CancellationTokenSource())
+{
+    cancelled.Cancel();
+    var cancellationObserved = false;
+    try
+    {
+        await RunPhases((request, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            return phaseModel(request, token);
+        }, cancelled.Token);
+    }
+    catch (OperationCanceledException) { cancellationObserved = true; }
+    Assert(cancellationObserved, "module025_phase_cancellation_preserved");
+}
+
+var rejectedGenericModule025 = false;
+try
+{
+    _ = module025Parser.Invoke(
+        null,
+        new object?[]
+        {
+            module025Payload.Replace(
+                "Complete technology-specific",
+                "Prepare the cited scope for the",
+                StringComparison.Ordinal),
+            module025Retrieval
+        });
+}
+catch (TargetInvocationException exception) when (exception.InnerException is JsonException)
+{
+    rejectedGenericModule025 = true;
+}
+Assert(rejectedGenericModule025, "module025_generic_cited_scope_language_rejected");
+
+var rejectedNonTextModule025 = false;
+try
+{
+    _ = module025Parser.Invoke(
+        null,
+        new object?[]
+        {
+            module025Payload.Replace(
+                "\"Cisco Collaboration Engineer\"",
+                "{\"text\":true}",
+                StringComparison.Ordinal),
+            module025Retrieval
+        });
+}
+catch (TargetInvocationException exception) when (exception.InnerException is JsonException)
+{
+    rejectedNonTextModule025 = true;
+}
+Assert(rejectedNonTextModule025, "module025_non_string_text_object_rejected");
+
+var sourcePlan = new ProjectFlowHivePlanRequest(
+    ProjectId: Guid.NewGuid(),
+    ProjectCode: "TEST-066",
+    ProjectName: "Detailed FlowHive planning test",
+    CustomerName: "Test customer",
+    PlanName: "Detailed governed plan",
+    RevisionLabel: "test",
+    ProjectStartDate: new DateOnly(2026, 8, 24),
+    ProjectEndDate: new DateOnly(2026, 10, 30),
+    Tasks: [],
+    Dependencies: [],
+    Assignments: [],
+    GsdVersion: "GSD-1",
+    SowVersion: "SOW-1",
+    Notes: string.Empty);
+
+var first = new PulseAiPrivateFlowHiveTask(
+    Wbs: "SOW-1",
+    Name: "Migrate the collaboration platform",
+    Description: "Migrate the authorized collaboration platform services to the approved target environment.",
+    EstimatedDurationDays: 15m,
+    RequiredRoles: ["Project Manager", "Collaboration Engineer", "Customer Technical Owner"],
+    Predecessors: [],
+    CitationIds: [1],
+    IsAssumption: false,
+    Phase: "Implement",
+    DetailedSteps:
+    [
+        "Export the approved source configuration and retain the pre-change evidence.",
+        "Migrate the authorized configuration in the reviewed sequence.",
+        "Record the resulting target configuration and exceptions."
+    ],
+    Inputs:
+    [
+        "Approved source and target platform inventory",
+        "Administrative access through the approved customer process",
+        "Approved licensing and maintenance window"
+    ],
+    Outputs: ["Migrated target configuration", "As-built configuration record"],
+    AcceptanceCriteria: ["Authorized services operate in the approved target environment and are supported by retained evidence."],
+    ValidationSteps: ["Validate service registration, connectivity, functional behavior, monitoring, and rollback readiness."],
+    CustomerResponsibilities: ["Provide the approved maintenance window, licensing, access, and acceptance participants."],
+    UsSignalResponsibilities: ["Execute the reviewed migration and retain objective evidence without recording secrets."],
+    Prerequisites: ["Approved design, backup, access, licensing, and rollback plan are available."],
+    Risks: ["An unsupported version or unavailable dependency can delay the migration."],
+    OpenQuestions: ["Which source and target versions require final confirmation?"],
+    EstimatedHours: 120m,
+    Priority: "high");
+
+var second = new PulseAiPrivateFlowHiveTask(
+    Wbs: "SOW-2",
+    Name: "Enable operational monitoring and handoff",
+    Description: "Enable the source-backed monitoring, alerting, documentation, and support handoff required by the approved scope.",
+    EstimatedDurationDays: 8m,
+    RequiredRoles: ["Project Manager", "Monitoring Engineer", "Customer Operations Owner"],
+    Predecessors: ["SOW-1"],
+    CitationIds: [2],
+    IsAssumption: false,
+    Phase: "Implement",
+    DetailedSteps:
+    [
+        "Configure the approved monitoring targets and alert routes.",
+        "Validate alert generation and escalation behavior.",
+        "Complete the operating runbook and support handoff."
+    ],
+    Inputs: ["Approved monitoring requirements", "Alert recipient and escalation information"],
+    Outputs: ["Monitoring configuration", "Validated alerts", "Operating runbook"],
+    AcceptanceCriteria: ["Approved monitoring checks and alert routes pass with documented evidence."],
+    ValidationSteps: ["Generate approved test conditions and verify monitoring, notification, and escalation results."],
+    CustomerResponsibilities: ["Confirm alert recipients, escalation ownership, and operating acceptance."],
+    UsSignalResponsibilities: ["Configure, validate, document, and hand off the approved monitoring scope."],
+    Prerequisites: ["The migrated platform is available and the approved monitoring interfaces are reachable."],
+    Risks: ["Incomplete recipient or escalation information can prevent operational acceptance."],
+    OpenQuestions: ["Which support groups and notification channels require final approval?"],
+    EstimatedHours: 64m,
+    Priority: "normal");
+
+var privatePlan = new PulseAiPrivateFlowHivePlan(
+    Objective: "Create a complete implementation plan from the authorized SOW.",
+    Tasks: [first, second],
+    Milestones: [],
+    Dependencies: ["SOW-2 follows SOW-1."],
+    RequiredRoles: ["Project Manager", "Engineering reviewer"],
+    Assumptions: [],
+    Risks: [],
+    OutOfScopeItems: [],
+    OpenQuestions: [],
+    Conflicts: [],
+    CitationIds: [1, 2],
+    Confidence: 0.90m,
+    ConfidenceExplanation: "Test evidence is complete.");
+
+var generated = ProjectFlowHiveDetailedPlanBuilder.Build(sourcePlan, privatePlan);
+var tasks = generated.Tasks?.ToArray() ?? [];
+var executable = tasks.Where(task => !task.IsSummary).ToArray();
+var summaries = tasks.Where(task => task.IsSummary).ToArray();
+var dependencies = generated.Dependencies?.ToArray() ?? [];
+
+Assert(ProjectFlowHiveDetailedPlanBuilder.DetailContract.Contains("five-phase-detailed-work-package"), "detail_contract_declared");
+Assert(summaries.Length == 5, "five_phase_summaries_created");
+Assert(executable.Length == 10, "two_work_packages_expand_to_ten_detailed_tasks");
+Assert(tasks.Length == 15, "summaries_and_detailed_tasks_total");
+
+foreach (var phase in new[] { "Plan", "Design", "Implement", "Validate", "Release" })
+{
+    var phaseTasks = executable.Where(task => task.Phase == phase).ToArray();
+    Assert(phaseTasks.Length == 2, $"{phase.ToLowerInvariant()}_contains_each_work_package");
+}
+
+foreach (var task in executable)
+{
+    Assert(!string.IsNullOrWhiteSpace(task.Name), $"{task.WbsNumber}_name_present");
+    Assert(!string.IsNullOrWhiteSpace(task.Description) && task.Description!.Length > 120, $"{task.WbsNumber}_description_detailed");
+    Assert((task.DetailedSteps?.Count ?? 0) >= 6, $"{task.WbsNumber}_ordered_steps_detailed");
+    Assert((task.Inputs?.Count ?? 0) >= 4, $"{task.WbsNumber}_inputs_and_used_items_detailed");
+    Assert((task.Outputs?.Count ?? 0) >= 2, $"{task.WbsNumber}_outputs_detailed");
+    Assert((task.AcceptanceCriteria?.Count ?? 0) >= 3, $"{task.WbsNumber}_acceptance_detailed");
+    Assert((task.ValidationSteps?.Count ?? 0) >= 3, $"{task.WbsNumber}_validation_detailed");
+    Assert((task.CustomerResponsibilities?.Count ?? 0) >= 3, $"{task.WbsNumber}_customer_responsibilities_detailed");
+    Assert((task.UsSignalResponsibilities?.Count ?? 0) >= 3, $"{task.WbsNumber}_ussignal_responsibilities_detailed");
+    Assert((task.Prerequisites?.Count ?? 0) >= 3, $"{task.WbsNumber}_prerequisites_detailed");
+    Assert((task.Risks?.Count ?? 0) >= 3, $"{task.WbsNumber}_risks_detailed");
+    Assert((task.OpenQuestions?.Count ?? 0) >= 3, $"{task.WbsNumber}_open_questions_detailed");
+    Assert(task.DurationWorkingDays >= 1, $"{task.WbsNumber}_duration_present");
+    Assert(task.RemainingEffortHours > 0, $"{task.WbsNumber}_effort_present");
+    Assert((task.CitationIds?.Count ?? 0) == 1, $"{task.WbsNumber}_citation_preserved");
+    Assert(task.Notes?.Contains("Required roles:", StringComparison.Ordinal) == true, $"{task.WbsNumber}_roles_recorded");
+}
+
+foreach (var phaseNumber in Enumerable.Range(1, 5))
+{
+    Assert(executable.Single(task => task.WbsNumber == $"{phaseNumber}.1").CitationIds!.SequenceEqual([1]), $"package_one_phase_{phaseNumber}_citation_one");
+    Assert(executable.Single(task => task.WbsNumber == $"{phaseNumber}.2").CitationIds!.SequenceEqual([2]), $"package_two_phase_{phaseNumber}_citation_two");
+}
+
+foreach (var packageNumber in new[] { 1, 2 })
+{
+    for (var phaseNumber = 1; phaseNumber < 5; phaseNumber++)
+    {
+        Assert(dependencies.Any(dependency =>
+            dependency.PredecessorWbs == $"{phaseNumber}.{packageNumber}"
+            && dependency.SuccessorWbs == $"{phaseNumber + 1}.{packageNumber}"
+            && dependency.Type == "FS"),
+            $"package_{packageNumber}_phase_{phaseNumber}_to_{phaseNumber + 1}_dependency");
+    }
+}
+
+Assert(dependencies.Any(dependency => dependency.PredecessorWbs == "5.1" && dependency.SuccessorWbs == "1.2"),
+    "source_predecessor_connects_release_to_next_plan");
+Assert(executable.Single(task => task.WbsNumber == "1.1").Inputs!.Any(value => value.Contains("Approved licensing", StringComparison.OrdinalIgnoreCase)),
+    "source_backed_used_items_preserved");
+Assert(executable.Single(task => task.WbsNumber == "3.1").DetailedSteps!.Any(value => value.Contains("Export the approved source configuration", StringComparison.OrdinalIgnoreCase)),
+    "source_backed_implementation_steps_preserved");
+Assert(generated.Notes?.Contains("Generated executable tasks: 10", StringComparison.Ordinal) == true,
+    "plan_notes_explain_detailed_task_count");
+Assert((generated.Milestones?.Count ?? 0) >= 2, "work_package_release_milestones_created");
+Assert(generated.Milestones!.All(item => item.CitationIds.Count > 0), "milestone_citations_preserved");
+Assert(generated.Milestones!.All(item => item.PredecessorWbs.StartsWith("5.", StringComparison.Ordinal)), "milestones_follow_release_tasks");
+Assert((generated.Assignments?.Count ?? 0) == executable.Length, "role_resources_populated_for_every_executable_task");
+Assert(generated.Assignments!.All(item => !string.IsNullOrWhiteSpace(item.ResourceDisplayName)), "role_resource_names_populated");
+
+Assert(
+    PulseAiPrivateDocumentPipelinePolicy.SupportedExtensions.Contains(".doc", StringComparer.OrdinalIgnoreCase),
+    "legacy_doc_admitted_by_immutable_snapshot_policy");
+Assert(
+    PulseAiPrivateDocumentPipelinePolicy.ExplicitlyBlockedExtensions.Contains(".docm", StringComparer.OrdinalIgnoreCase),
+    "macro_enabled_word_remains_blocked");
+
+var boundedReader = typeof(PulseAiLegacyBinaryWordExtraction).GetMethod(
+    "ReadBoundedAsync",
+    BindingFlags.NonPublic | BindingFlags.Static);
+Assert(boundedReader is not null, "legacy_word_bounded_reader_available_for_regression");
+
+var oversizedOutput = new string('X', (16 * 1024 * 8) + 317);
+using var oversizedStream = new MemoryStream(Encoding.UTF8.GetBytes(oversizedOutput));
+using var oversizedReader = new StreamReader(
+    oversizedStream,
+    Encoding.UTF8,
+    detectEncodingFromByteOrderMarks: false,
+    bufferSize: 1_024,
+    leaveOpen: true);
+var boundedTask = boundedReader!.Invoke(
+    null,
+    new object?[] { oversizedReader, 1_024, CancellationToken.None }) as Task<string>;
+Assert(boundedTask is not null, "legacy_word_bounded_reader_invoked");
+var boundedOutput = await boundedTask!;
+Assert(boundedOutput.Length == 1_024, "legacy_word_retained_output_is_bounded");
+Assert(oversizedReader.EndOfStream, "legacy_word_excess_output_is_fully_drained");
+
+// Reproduce the Protected-Test SMB processing boundary with a structurally valid
+// sealed local immutable snapshot. This exercises the compiled extractor rather
+// than the standalone adapter, so CI fails if the generated-source rewrite is
+// skipped and the runtime falls back to blocked_by_document_safety_policy.
+var snapshotProcessingRoot = Path.Combine(
+    Path.GetTempPath(),
+    "projectpulse-private-document-processing");
+var snapshotJobId = Guid.NewGuid();
+var snapshotLeaseToken = Guid.NewGuid();
+var snapshotFence = Convert.ToHexString(
+        System.Security.Cryptography.RandomNumberGenerator.GetBytes(16))
+    .ToLowerInvariant();
+var legacySowBytes = Encoding.UTF8.GetBytes(
+    "Scope of Services\n\nPlan the approved collaboration migration.\n\nValidate service readiness and complete customer handoff.");
+var legacySowSha256 = Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(legacySowBytes))
+    .ToLowerInvariant();
+var snapshotFileName = $"{legacySowSha256}.doc";
+var snapshotJobDirectory = Path.Combine(snapshotProcessingRoot, snapshotJobId.ToString("N"));
+var snapshotAttemptDirectory = Path.Combine(
+    snapshotJobDirectory,
+    $"1-{snapshotLeaseToken:N}-{snapshotFence}");
+var snapshotPath = Path.Combine(snapshotAttemptDirectory, snapshotFileName);
+var unrelatedUploadRoot = Path.Combine(
+    Path.GetTempPath(),
+    $"flowhive-legacy-word-upload-root-{Guid.NewGuid():N}");
+Directory.CreateDirectory(snapshotAttemptDirectory);
+Directory.CreateDirectory(unrelatedUploadRoot);
+await File.WriteAllBytesAsync(snapshotPath, legacySowBytes);
+
+try
+{
+    var legacySowSource = new PulseAiAuthorizedDocumentSource(
+        DocumentId: Guid.NewGuid(),
+        ProjectId: Guid.NewGuid(),
+        ProjectCode: "TEST-066",
+        ProjectName: "Detailed FlowHive planning test",
+        CustomerName: "Test customer",
+        DocumentType: "sow",
+        DocumentCategory: "scope_of_services",
+        OriginalFileName: "SOW_Sample.doc",
+        StoredFileName: snapshotFileName,
+        StoragePath: snapshotPath,
+        ContentType: "application/msword",
+        SizeBytes: legacySowBytes.LongLength,
+        EngineeringVisible: true,
+        AiTimesheetContextEnabled: true,
+        ExtractionStatus: "queued",
+        ExistingContextSummaryReady: false,
+        ContextLastProcessedAt: null,
+        UploadedAt: DateTimeOffset.UtcNow,
+        UploadSource: "work_register",
+        AccessScope: "project",
+        Classification: "internal",
+        RoleCodes: ["project_manager"]);
+
+    var legacySowOptions = new PulseAiDocumentPipelineOptions(
+        UploadRoot: unrelatedUploadRoot,
+        ExtractionPreviewEnabled: true,
+        MalwareScanAttested: true,
+        MalwareScannerMode: "compiled_regression_attested",
+        OcrEndpointConfigured: false,
+        PrivateEmbeddingEndpointConfigured: false,
+        PrivateVectorIndexConfigured: false,
+        MaximumFileBytes: 25L * 1024L * 1024L,
+        MaximumPages: 500,
+        MaximumCharacters: 2_000_000,
+        MaximumSections: 1_000,
+        MaximumChunks: 1_500,
+        ChunkCharacters: 2_400,
+        ChunkOverlapCharacters: 280);
+
+    var compiledExtractor = new PulseAiPrivateDocumentExtractionService(
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<PulseAiPrivateDocumentExtractionService>.Instance);
+    var legacySowExtraction = await compiledExtractor.ExtractAsync(
+        legacySowSource,
+        legacySowOptions,
+        CancellationToken.None);
+
+    Assert(legacySowExtraction.Status == "extraction_preview_ready", "legacy_word_compiled_extractor_ready");
+    Assert(legacySowExtraction.Safety.PathConfined, "legacy_word_sealed_snapshot_path_is_trusted");
+    Assert(legacySowExtraction.Safety.SignatureMatchesExtension, "legacy_word_signature_is_admitted");
+    Assert(legacySowExtraction.Safety.DetectedFormat == "legacy_doc_text", "legacy_word_text_compatible_format_detected");
+    Assert(legacySowExtraction.ExtractionMethod == "legacy_doc_private_text_reader", "legacy_word_compiled_route_uses_private_adapter");
+    Assert(legacySowExtraction.SourceSha256 == legacySowSha256, "legacy_word_compiled_route_preserves_source_sha");
+    Assert(legacySowExtraction.Sections.Count > 0, "legacy_word_compiled_route_produces_citation_sections");
+}
+finally
+{
+    if (Directory.Exists(snapshotJobDirectory))
+        Directory.Delete(snapshotJobDirectory, recursive: true);
+    if (Directory.Exists(unrelatedUploadRoot))
+        Directory.Delete(unrelatedUploadRoot, recursive: true);
+}
+
+var shortWindow = sourcePlan with { ProjectEndDate = sourcePlan.ProjectStartDate!.Value.AddDays(4) };
+var shortGenerated = ProjectFlowHiveDetailedPlanBuilder.Build(shortWindow, privatePlan);
+var shortSchedule = ProjectFlowHiveScheduleEngine.Calculate(shortGenerated);
+Assert(shortSchedule.Valid, "short_selected_window_remains_saveable_working_draft");
+Assert(shortSchedule.Status == "calculated_preview_window_exceeded", "short_selected_window_reports_overrun_status");
+Assert(shortSchedule.Issues.Any(issue => issue.Code == "project_end_exceeded" && issue.Severity == "warning"), "project_end_exceeded_is_explicit_warning");
+Assert(shortSchedule.Tasks.Any(task => task.IsCritical && !task.IsSummary), "critical_path_is_identified");
+var normalDurations = generated.Tasks!.Where(task => !task.IsSummary).ToDictionary(task => task.WbsNumber!, task => task.DurationWorkingDays);
+var shortDurations = shortGenerated.Tasks!.Where(task => !task.IsSummary).ToDictionary(task => task.WbsNumber!, task => task.DurationWorkingDays);
+Assert(normalDurations.OrderBy(pair => pair.Key).SequenceEqual(shortDurations.OrderBy(pair => pair.Key)), "selected_window_does_not_compress_estimates");
+Assert(shortGenerated.Tasks!.Where(task => !task.IsSummary).All(task => task.RequiredRoles?.Count > 0), "required_roles_are_structured");
+Assert(shortGenerated.Tasks!.Where(task => !task.IsSummary).All(task => task.OpenQuestions?.Count > 0), "missing_technical_information_becomes_open_questions");
+
+foreach (var artifactKind in new[] { "timeline-risk", "raid", "decision-matrix", "gantt", "monthly-calendar", "work-breakdown" })
+{
+    var exportArtifact = new ProjectFlowHivePsaArtifactTable(
+        artifactKind,
+        "=Injected title",
+        "=PROJECT",
+        "@Customer",
+        "-Customer",
+        ["=Column", "Safe column", "Date", "Amount", "Notes", "Unicode", "Whitespace", "Apostrophe", "Ordinary"],
+        new IReadOnlyList<object?>[]
+        {
+            new object?[] { "=SUM(A1)", "+Injected value", new DateOnly(2026, 9, 8), -12.5m, "@Injected note", "é漢", " =SUM(B1)", "'literal", "ordinary" },
+            new object?[] { "-Injected value", "@Injected value", new DateOnly(2026, 10, 1), 42m, "safe", "東京", "  +Injected", "'=SUM(A1)", "123" }
+        },
+        ["=Injected note", "é漢 note"]);
+
+    var pdfLongDescription =
+        $"Detailed scope for {artifactKind}: Café's quoted delivery description / formula-like text =SUM(A1) " +
+        "must wrap across lines without losing punctuation or the final acceptance phrase.";
+    IReadOnlyList<string> pdfColumns;
+    IReadOnlyList<IReadOnlyList<object?>> pdfRows;
+    var expectedScheduleIds = new HashSet<string>(StringComparer.Ordinal);
+    if (artifactKind.Equals("gantt", StringComparison.OrdinalIgnoreCase))
+    {
+        pdfColumns = ["WBS", "Task", "Start", "End", "Duration", "Start Offset", "Critical", "Float", "Predecessor"];
+        var ganttRows = Enumerable.Range(1, 12)
+            .Select(index => (IReadOnlyList<object?>)new object?[]
+            {
+                $"GANTT-{index:00}",
+                index == 1
+                    ? $"GANTT-LONG-TASK-DETAIL-MARKER-ALPHA — {pdfLongDescription} with a distinct appendix-only ending."
+                    : $"GANTT-TASK-{index:00}-DISTINCT-NAME — Résumé 東京 review",
+                index <= 8
+                    ? new DateOnly(2026, 9, 15)
+                    : index == 9 ? new DateOnly(2026, 9, 29)
+                    : index == 10 ? new DateOnly(2026, 10, 1)
+                    : new DateOnly(2026, 10, 15),
+                index <= 8
+                    ? new DateOnly(2026, 9, 17)
+                    : index == 9 ? new DateOnly(2026, 10, 2)
+                    : index == 10 ? new DateOnly(2026, 10, 5)
+                    : new DateOnly(2026, 10, 20),
+                index + 2, index, index is 1 or 9 ? "Yes" : "No", 0, ""
+            })
+            .ToList();
+        ganttRows.AddRange([
+            (IReadOnlyList<object?>)["GANTT-MISSING-START", "GANTT-MISSING-START unique unscheduled marker", null, new DateOnly(2026, 10, 7), 1, 0, "No", 0, ""],
+            (IReadOnlyList<object?>)["GANTT-REVERSED", "GANTT-REVERSED unique invalid marker", new DateOnly(2026, 10, 10), new DateOnly(2026, 10, 1), 1, 0, "No", 0, ""],
+            (IReadOnlyList<object?>)["GANTT-INVALID-DATE", "GANTT-INVALID-DATE unique invalid marker", "not-a-date", new DateOnly(2026, 10, 8), 1, 0, "No", 0, ""]
+        ]);
+        pdfRows = ganttRows;
+        expectedScheduleIds = ganttRows.Select(row => row[0]!.ToString()!).ToHashSet(StringComparer.Ordinal);
+    }
+    else if (artifactKind.Equals("monthly-calendar", StringComparison.OrdinalIgnoreCase))
+    {
+        pdfColumns = ["Start Date", "End Date", "WBS", "Phase", "Task", "Assigned Identity", "Status"];
+        var calendarRows = Enumerable.Range(1, 12)
+            .Select(index => (IReadOnlyList<object?>)new object?[]
+            {
+                index <= 8 ? new DateOnly(2026, 9, 15) : index == 9 ? new DateOnly(2026, 9, 29) : new DateOnly(2026, 10, 1),
+                index <= 8 ? new DateOnly(2026, 9, 17) : index == 9 ? new DateOnly(2026, 10, 2) : new DateOnly(2026, 10, 5),
+                $"CAL-{index:00}", $"Phase {index:00}",
+                index == 1
+                    ? $"CAL-LONG-TASK-DETAIL-MARKER-ALPHA — {pdfLongDescription} with a distinct appendix-only ending."
+                    : $"CAL-TASK-{index:00}-DISTINCT-NAME — Résumé 東京 review",
+                $"Owner {index:00}", index == 1 ? "At risk" : "Ready"
+            })
+            .ToList();
+        calendarRows.AddRange([
+            (IReadOnlyList<object?>)[null, new DateOnly(2026, 10, 7), "CAL-MISSING-START", "Phase missing", "CAL-MISSING-START unique unscheduled marker", "Owner missing", "Blocked"],
+            (IReadOnlyList<object?>)[new DateOnly(2026, 10, 10), new DateOnly(2026, 10, 1), "CAL-REVERSED", "Phase reversed", "CAL-REVERSED unique invalid marker", "Owner reversed", "Blocked"],
+            (IReadOnlyList<object?>)["not-a-date", new DateOnly(2026, 10, 8), "CAL-INVALID-DATE", "Phase invalid", "CAL-INVALID-DATE unique invalid marker", "Owner invalid", "Blocked"]
+        ]);
+        pdfRows = calendarRows;
+        expectedScheduleIds = calendarRows.Select(row => row[2]!.ToString()!).ToHashSet(StringComparer.Ordinal);
+    }
+    else
+    {
+        pdfColumns = ["ID", "Description", "Due date", "Hours", "Notes", "Unicode", "Owner", "Status", "Evidence", "Risk / Decision"];
+        pdfRows = Enumerable.Range(1, 26)
+            .Select(index => (IReadOnlyList<object?>)new object?[]
+            {
+                $"T-{index:00}",
+                index == 1 ? pdfLongDescription : $"Résumé task {index:00} - 東京 review",
+                new DateOnly(2026, 9, Math.Min(index, 30)),
+                index * 1.5m,
+                index == 1 ? "Names, punctuation (quoted), and wrapping" : "Review",
+                index == 1 ? "München 東京" : "é東京",
+                $"Owner {index:00}",
+                index == 1 ? "Ready" : "In review",
+                $"PDF-COLUMN-EVIDENCE-{index:00}",
+                $"PDF-COLUMN-RISK-{index:00}"
+            })
+            .ToArray();
+    }
+    var pdfArtifact = exportArtifact with
+    {
+        Title = "München - 東京 delivery plan",
+        ProjectName = "Résumé program - 東京",
+        CustomerName = "株式会社 東京",
+        Columns = pdfColumns,
+        Rows = pdfRows,
+        Notes = ["Synthetic export validation only; task markers appear only in task rows.", "Résumé note - 東京"]
+    };
+
+    var exportBytes = ProjectFlowHivePsaArtifactRenderer.BuildExcel(exportArtifact);
+    using var exportWorkbook = new XLWorkbook(new MemoryStream(exportBytes));
+    var exportSheet = exportWorkbook.Worksheet(artifactKind);
+    var summarySheet = exportWorkbook.Worksheet("Artifact Summary");
+
+    Assert(!exportSheet.Cell(2, 1).HasFormula
+        && exportSheet.Cell(2, 1).DataType == XLDataType.Text
+        && exportSheet.Cell(2, 1).GetString() == "=SUM(A1)"
+        && exportSheet.Cell(2, 1).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_formula_like_text_is_safe_and_lossless");
+    Assert(!exportSheet.Cell(2, 2).HasFormula
+        && exportSheet.Cell(2, 2).GetString() == "+Injected value"
+        && exportSheet.Cell(2, 2).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_plus_text_is_safe_and_lossless");
+    Assert(!exportSheet.Cell(3, 1).HasFormula
+        && exportSheet.Cell(3, 1).GetString() == "-Injected value"
+        && exportSheet.Cell(3, 1).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_minus_text_is_safe_and_lossless");
+    Assert(!exportSheet.Cell(3, 2).HasFormula
+        && exportSheet.Cell(3, 2).GetString() == "@Injected value"
+        && exportSheet.Cell(3, 2).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_at_text_is_safe_and_lossless");
+    Assert(!exportSheet.Cell(1, 1).HasFormula
+        && exportSheet.Cell(1, 1).GetString() == "=Column"
+        && exportSheet.Cell(1, 1).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_dynamic_header_is_safe");
+    Assert(exportSheet.Cell(2, 3).DataType == XLDataType.DateTime
+        && exportSheet.Cell(2, 3).GetDateTime().Date == new DateTime(2026, 9, 8),
+        $"xlsx_{artifactKind}_date_remains_typed");
+    Assert(exportSheet.Cell(2, 4).DataType == XLDataType.Number
+        && Math.Abs(exportSheet.Cell(2, 4).GetDouble() - (-12.5d)) < 0.000001d
+        && !exportSheet.Cell(2, 4).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_negative_amount_remains_numeric");
+    Assert(exportSheet.Cell(2, 6).GetString() == "é漢", $"xlsx_{artifactKind}_unicode_round_trip");
+    Assert(exportSheet.Cell(2, 7).GetString() == " =SUM(B1)"
+        && exportSheet.Cell(2, 7).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_leading_whitespace_formula_like_text_is_lossless");
+    Assert(exportSheet.Cell(2, 8).GetString() == "'literal"
+        && exportSheet.Cell(2, 8).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_leading_apostrophe_is_lossless");
+    Assert(summarySheet.Cell(5, 2).GetString() == "=Injected title"
+        && summarySheet.Cell(5, 2).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_dynamic_title_is_safe");
+    Assert(summarySheet.Cell(7, 2).GetString() == "=PROJECT · @Customer"
+        && summarySheet.Cell(7, 2).Style.IncludeQuotePrefix
+        && summarySheet.Cell(8, 2).GetString() == "-Customer"
+        && summarySheet.Cell(8, 2).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_dynamic_summary_fields_are_safe");
+    Assert(summarySheet.Cell(13, 2).GetString().Contains("=Injected note", StringComparison.Ordinal)
+        && summarySheet.Cell(13, 2).Style.IncludeQuotePrefix,
+        $"xlsx_{artifactKind}_dynamic_notes_are_safe");
+    Assert(exportWorkbook.Worksheets.SelectMany(sheet => sheet.CellsUsed()).All(cell => !cell.HasFormula),
+        $"xlsx_{artifactKind}_all_cells_remain_text_or_values");
+
+    var pdfBytes = ProjectFlowHivePsaArtifactRenderer.BuildPdf(pdfArtifact);
+    var evidenceDirectory = Environment.GetEnvironmentVariable("FLOWHIVE_EXPORT_EVIDENCE_DIR");
+    if (!string.IsNullOrWhiteSpace(evidenceDirectory))
+    {
+        Directory.CreateDirectory(evidenceDirectory);
+        File.WriteAllBytes(Path.Combine(evidenceDirectory, $"{artifactKind}.xlsx"), exportBytes);
+        File.WriteAllBytes(Path.Combine(evidenceDirectory, $"{artifactKind}.pdf"), pdfBytes);
+    }
+
+    using var pdfDocument = PdfDocument.Open(new MemoryStream(pdfBytes));
+    var pdfText = string.Join("\n", pdfDocument.GetPages().Select(page => page.Text));
+    Assert(pdfDocument.NumberOfPages >= 2, $"pdf_{artifactKind}_paginates_long_report");
+    Assert(pdfText.Contains("US Signal Project FlowHive", StringComparison.Ordinal)
+        && pdfText.Contains("US SIGNAL PROJECT DELIVERY ARTIFACT", StringComparison.Ordinal),
+        $"pdf_{artifactKind}_contains_us_signal_branding");
+    Assert(pdfText.Contains("München", StringComparison.Ordinal)
+        && pdfText.Contains("東京", StringComparison.Ordinal)
+        && pdfText.Contains("株式会社", StringComparison.Ordinal),
+        $"pdf_{artifactKind}_preserves_accented_and_non_latin_text");
+    if (!artifactKind.Equals("gantt", StringComparison.OrdinalIgnoreCase)
+        && !artifactKind.Equals("monthly-calendar", StringComparison.OrdinalIgnoreCase))
+    {
+        Assert(pdfColumns.All(column => pdfText.Contains(column.ToUpperInvariant(), StringComparison.Ordinal)),
+            $"pdf_{artifactKind}_renders_all_columns");
+    }
+    var pdfDescriptionTokens = NormalizePdfText(pdfLongDescription)
+        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    Assert(pdfDescriptionTokens.All(token => pdfText.Contains(token, StringComparison.Ordinal)),
+        $"pdf_{artifactKind}_preserves_wrapped_long_description_tokens");
+    Assert(pdfText.Contains("=SUM(A1)", StringComparison.Ordinal)
+        && !pdfText.Contains("'=SUM(A1)", StringComparison.Ordinal),
+        $"pdf_{artifactKind}_does_not_apply_spreadsheet_apostrophe_escaping");
+    if (artifactKind.Equals("gantt", StringComparison.OrdinalIgnoreCase))
+    {
+        Assert(pdfText.Contains("Graphical Gantt schedule", StringComparison.Ordinal)
+            && pdfText.Contains("SCHEDULE / DATES", StringComparison.Ordinal)
+            && pdfText.Contains("critical", StringComparison.Ordinal)
+            && pdfText.Contains("Task details appendix", StringComparison.Ordinal)
+            && pdfText.Contains("GANTT-MISSING-START", StringComparison.Ordinal)
+            && pdfText.Contains("GANTT-REVERSED", StringComparison.Ordinal)
+            && pdfText.Contains("dates were not swapped", StringComparison.Ordinal),
+            "pdf_gantt_uses_graphical_schedule_layout");
+        var exportedIds = Regex.Matches(pdfText, @"ID:\s*(GANTT-[A-Z0-9-]+)\s*\|")
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var presentIds = expectedScheduleIds.Where(pdfText.Contains).ToHashSet(StringComparer.Ordinal);
+        Assert(presentIds.SetEquals(expectedScheduleIds) && exportedIds.SetEquals(expectedScheduleIds),
+            "pdf_gantt_reconciles_all_expected_task_ids");
+        Assert(pdfDocument.NumberOfPages >= 4, "pdf_gantt_has_graph_and_detail_continuation_pages");
+    }
+    if (artifactKind.Equals("monthly-calendar", StringComparison.OrdinalIgnoreCase))
+    {
+        Assert(pdfText.Contains("Graphical monthly calendar", StringComparison.Ordinal)
+            && pdfText.Contains("SUN", StringComparison.Ordinal)
+            && pdfText.Contains("SAT", StringComparison.Ordinal)
+            && pdfText.Contains("Task details appendix", StringComparison.Ordinal)
+            && pdfText.Contains("CAL-MISSING-START", StringComparison.Ordinal)
+            && pdfText.Contains("CAL-REVERSED", StringComparison.Ordinal)
+            && pdfText.Contains("OVERFLOW-5-MORE-SEE-APPENDIX", StringComparison.Ordinal)
+            && pdfText.Contains("dates were not swapped", StringComparison.Ordinal),
+            "pdf_monthly_calendar_uses_graphical_month_grid");
+        var exportedIds = Regex.Matches(pdfText, @"ID:\s*(CAL-[A-Z0-9-]+)\s*\|")
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var presentIds = expectedScheduleIds.Where(pdfText.Contains).ToHashSet(StringComparer.Ordinal);
+        Assert(presentIds.SetEquals(expectedScheduleIds) && exportedIds.SetEquals(expectedScheduleIds),
+            "pdf_monthly_calendar_reconciles_all_expected_task_ids");
+        Assert(pdfDocument.NumberOfPages >= 4, "pdf_monthly_calendar_has_month_and_detail_continuation_pages");
+    }
+    if (!string.IsNullOrWhiteSpace(evidenceDirectory))
+        Console.WriteLine($"PDF_EVIDENCE_{artifactKind}={Path.Combine(evidenceDirectory, $"{artifactKind}.pdf")}");
+}
+
+await Module025ExternalSowTests.RunAsync(parsedModule025);
+Module025GenerationStatusTests.Run();
+await Module025GenerationEngineTests.RunAsync(parsedModule025);
+await Module025WorkerAuthorizationTests.RunAsync();
+Console.WriteLine("FLOWHIVE_DETAILED_PLANNER_TESTS=PASS");

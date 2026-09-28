@@ -1,0 +1,158 @@
+using System.Text.Json;
+
+namespace ProjectTime.Api.Ai;
+
+// Module 025 owns its generation state. Partial phases are private checkpoints,
+// never a published SOW, a confirmed version, or a generic fallback artifact.
+internal static class Module025GenerationEngine
+{
+    internal const string ContractVersion = "module025-shared-scope-phases-v3";
+    // Five phases can each try DeepSeek (120s), then Celar (330s), with
+    // 150s reserved for persistence and assembly. The deadline stays durable.
+    internal const int DeadlineSeconds = 2400;
+    internal const int PrivatePhaseTimeoutSeconds = 330;
+    internal const int GatewayPhaseTimeoutSeconds = 300;
+    // Legacy provider/qualification transport budget. Durable private phases use
+    // PrivatePhaseTimeoutSeconds; paid provider routing retains its 120s cap.
+    internal const int ProviderTimeoutSeconds = 180;
+    // External closed-capsule providers stay on the tighter interactive budget.
+    internal const int ExternalProviderTimeoutSeconds = 120;
+    // Permit each registered model provider one bounded route attempt. Optional
+    // Gemini/Copilot targets must not consume the final private fallback slot.
+    // The persisted document deadline and each provider timeout stay unchanged.
+    internal const int AttemptsPerPhase = 6;
+    internal const int MaximumOutputTokens = 6144;
+    // The live OpenAI Plan response exhausted 6144 tokens before completion.
+    // Cloud phases get a separate bounded allowance; private inference, the
+    // persisted deadline and per-provider timeouts retain their existing limits.
+    internal const int MaximumExternalOutputTokens = 12288;
+    internal const int MaximumPhaseCharacters = 96_000;
+    // Five independently accepted phases plus assembly metadata must fit.
+    internal const int MaximumDocumentCharacters = 512_000;
+    internal static readonly string[] Phases = ["Plan", "Design", "Implement", "Validate", "Release"];
+
+    internal static async Task<CelarAiComposeResult> RunAsync(
+        CelarAiAuthoritativeScopeEvidence evidence,
+        IReadOnlyDictionary<string, CelarAiComposeResult> checkpoints,
+        IReadOnlyDictionary<string, int> attempts,
+        Func<CelarAiAuthoritativeScopeEvidence, CancellationToken, Task<CelarAiComposeResult>> generate,
+        Func<Module025GenerationProgress, CancellationToken, Task> persist,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<CelarAiComposeResult>();
+        var replayingPrefix = true;
+        foreach (var phase in Phases)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (replayingPrefix && checkpoints.TryGetValue(phase, out var checkpoint))
+            {
+                // Revalidate stored data against today's contract and exact saved source.
+                PulseAiPrivateRagService.ValidateModule025Phase(checkpoint.FlowHivePlan, phase, evidence);
+                results.Add(checkpoint);
+                await persist(new("phase_resumed", phase, checkpoint.SelectedTarget), cancellationToken);
+                continue;
+            }
+            // Later checkpoints may depend on the missing phase's old proposal.
+            // Resume only a complete validated prefix; rebuild after the first
+            // gap instead of combining incompatible planning continuations.
+            replayingPrefix = false;
+            var execution = new Module025PhaseExecution(phase, attempts.GetValueOrDefault(phase), persist,
+                BuildPriorPhaseReferences(results));
+            await persist(new("phase_started", phase), cancellationToken);
+            var result = await generate(evidence with { PhaseExecution = execution }, cancellationToken);
+            if (result.SowDraft is null || result.FlowHivePlan is null)
+            {
+                await persist(new("phase_failed", phase, result.SelectedTarget,
+                    DiagnosticCode: "module025_phase_provider_contract_failed",
+                    TargetDecisions: result.TargetDecisions), cancellationToken);
+                return result with { SowDraft = null, FlowHivePlan = null };
+            }
+            PulseAiPrivateRagService.ValidateModule025Phase(result.FlowHivePlan, phase, evidence);
+            // Await durable commit before spending inference on the next phase.
+            await persist(new("phase_completed", phase, result.SelectedTarget,
+                Result: result, TargetDecisions: result.TargetDecisions), cancellationToken);
+            results.Add(result);
+        }
+        // Keep post-provider failures distinguishable from a failed phase in
+        // the existing sanitized progress evidence. Do not expose draft text.
+        await persist(new("assembly_started", "assembly",
+            DiagnosticCode: "module025_assembly_started"), cancellationToken);
+        var plan = PulseAiPrivateRagService.AssembleModule025PhasePlans(results.Select(result => result.FlowHivePlan!).ToArray());
+        if (evidence.ServiceScopeOnly) plan = plan with { Objective = results[0].FlowHivePlan!.Objective };
+        PulseAiPrivateRagService.ValidateModule025Phase(plan, null, evidence);
+        if (JsonSerializer.Serialize(plan).Length > MaximumDocumentCharacters)
+            throw new JsonException("module025_assembled_plan_limit_exceeded");
+        var assembled = results[^1] with
+        {
+            FlowHivePlan = plan,
+            SowDraft = CelarAiEnterprisePlatformService.BuildSowDraftFromPlan(plan, evidence.EngagementNumber, evidence.CustomerName),
+            AttemptedTargets = results.SelectMany(result => result.AttemptedTargets ?? []).Distinct().ToArray(),
+            SkippedTargets = results.SelectMany(result => result.SkippedTargets ?? []).Distinct().ToArray(),
+            TargetDecisions = results.SelectMany(result => result.TargetDecisions ?? []).Distinct().ToArray()
+        };
+        await persist(new("assembly_completed", "assembly",
+            DiagnosticCode: "module025_assembly_completed"), cancellationToken);
+        return assembled;
+    }
+
+    // This deliberately carries no generated prose, source passages or customer
+    // facts. The same bounded structural context is safe for private providers
+    // and the existing closed external capsule. A validated proposal is not a
+    // customer decision, approved design or additional authoritative evidence.
+    private static IReadOnlyList<Module025PriorPhaseReferences> BuildPriorPhaseReferences(
+        IReadOnlyList<CelarAiComposeResult> results) => results.Select((result, index) =>
+            new Module025PriorPhaseReferences(Phases[index], result.FlowHivePlan!.Tasks.Count,
+                result.FlowHivePlan.Tasks.Select(task => task.Wbs)
+                    .Where(wbs => System.Text.RegularExpressions.Regex.IsMatch(wbs,
+                        $@"\A{index + 1}\.[1-9][0-9]?\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+                        TimeSpan.FromMilliseconds(100)))
+                    .Distinct(StringComparer.Ordinal).Take(20).ToArray())).ToArray();
+}
+
+internal sealed record Module025PriorPhaseReferences(string Phase, int WorkPackageCount, IReadOnlyList<string> WbsReferences);
+
+internal sealed record Module025GenerationProgress(
+    string Stage, string Phase, string Provider = "", int Attempt = 0,
+    string DiagnosticCode = "", string Model = "", int InputCharacters = 0,
+    int OutputCharacters = 0, long ElapsedMilliseconds = 0,
+    CelarAiComposeResult? Result = null,
+    IReadOnlyList<ProjectPulseAiTargetDecision>? TargetDecisions = null,
+    long? InputTokens = null, long? OutputTokens = null, string RequestedModel = "",
+    long? ReasoningTokens = null, Module025ProviderDiagnostics? SowDiagnostics = null);
+
+internal sealed class Module025PhaseExecution(
+    string phase, int attempts,
+    Func<Module025GenerationProgress, CancellationToken, Task> persist,
+    IReadOnlyList<Module025PriorPhaseReferences>? priorPhaseReferences = null)
+{
+    internal string Phase { get; } = phase;
+    internal IReadOnlyList<Module025PriorPhaseReferences> PriorPhaseReferences { get; } = priorPhaseReferences ?? [];
+    private int _attempts = attempts;
+    private string _provider = string.Empty;
+    private System.Diagnostics.Stopwatch? _elapsed;
+
+    internal async Task<bool> BeforeAttemptAsync(string provider, CancellationToken token)
+    {
+        if (_attempts >= Module025GenerationEngine.AttemptsPerPhase)
+            return false;
+        _provider = provider;
+        // Reserve the attempt durably before the provider call. A process restart
+        // cannot silently reset the call budget or duplicate a completed phase.
+        await persist(new("provider_started", Phase, provider, ++_attempts), token);
+        _elapsed = System.Diagnostics.Stopwatch.StartNew();
+        return true;
+    }
+
+    internal Task ObserveProviderAsync(ProjectPulseAiProviderResult result, string requestedModel, CancellationToken token) =>
+        persist(new("provider_finished", Phase, _provider, _attempts,
+            result.Code ?? (result.IsSuccess ? "phase_contract_completed" : "provider_failed"),
+            Model: requestedModel, ElapsedMilliseconds: _elapsed?.ElapsedMilliseconds ?? 0,
+            OutputCharacters: result.SowDiagnostics?.OutputTextCharacters ?? result.Content?.Length ?? 0,
+            InputTokens: result.Usage?.InputTokens, OutputTokens: result.Usage?.OutputTokens, RequestedModel: requestedModel,
+            ReasoningTokens: result.Usage?.ReasoningTokens, SowDiagnostics: result.SowDiagnostics), token);
+
+    internal Task ObserveAsync(PulseAiPrivateModelResult result, CancellationToken token) =>
+        persist(new("provider_completed", Phase, _provider, _attempts,
+            result.DiagnosticCode, result.Model, result.InputCharacters,
+            result.OutputCharacters, _elapsed?.ElapsedMilliseconds ?? 0), token);
+}

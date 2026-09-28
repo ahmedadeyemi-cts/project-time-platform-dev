@@ -1,0 +1,372 @@
+name: ProjectPulse Deploy Microsoft Integration 010 065 Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_commit:
+        description: Exact verified Microsoft Integration Connection source release
+        required: true
+        default: c38edbb63f50bf736092e3f71c581eead5bdb13a
+        type: string
+      confirmation:
+        description: Enter DEPLOY-MICROSOFT-INTEGRATION-010-065-TO-TEST
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: projectpulse-deploy-test
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Guarded Microsoft Integration Connection test deployment
+    environment: test
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_RELEASE_COMMIT: c38edbb63f50bf736092e3f71c581eead5bdb13a
+    steps:
+      - name: Check out deployment controls
+        uses: actions/checkout@v5
+        with:
+          path: control
+          fetch-depth: 0
+
+      - name: Check out exact verified source release
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_commit }}
+          path: release
+          fetch-depth: 1
+
+      - name: Guard workflow source and configuration-carryover release
+        id: release
+        shell: bash
+        env:
+          DISPATCH_RELEASE_COMMIT: ${{ inputs.release_commit }}
+          DISPATCH_CONFIRMATION: ${{ inputs.confirmation }}
+          WORKFLOW_SOURCE_REF: ${{ github.ref }}
+          WORKFLOW_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$WORKFLOW_SOURCE_REF" == 'refs/heads/main' ]] || { echo 'Dispatch this workflow from main.' >&2; exit 1; }
+          [[ "$DISPATCH_CONFIRMATION" == 'DEPLOY-MICROSOFT-INTEGRATION-010-065-TO-TEST' ]] || { echo 'Confirmation text does not match.' >&2; exit 1; }
+          [[ "$DISPATCH_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'release_commit must be a complete SHA.' >&2; exit 1; }
+
+          CONTROL_COMMIT="$(git -C control rev-parse HEAD)"
+          TARGET_COMMIT="$(git -C release rev-parse HEAD)"
+          [[ "$CONTROL_COMMIT" == "$WORKFLOW_SOURCE_SHA" ]]
+          [[ "$TARGET_COMMIT" == "$DISPATCH_RELEASE_COMMIT" ]]
+          [[ "$TARGET_COMMIT" == "$EXPECTED_RELEASE_COMMIT" ]] || { echo 'Only the verified Microsoft Integration Connection release may deploy.' >&2; exit 1; }
+          git -C control merge-base --is-ancestor "$TARGET_COMMIT" HEAD || { echo 'The source release is not an ancestor of the deployment controls.' >&2; exit 1; }
+
+          required_files=(
+            database/migrations/045_microsoft_integration_consolidation.sql
+            database/migrations/046_microsoft_sso_connection_profiles.sql
+            database/migrations/047_microsoft_integration_connection_carryover.sql
+            database/rollback/047_microsoft_integration_connection_carryover_rollback.sql
+            src/backend/ProjectTime.Api/Modules/MicrosoftIntegrationModule.cs
+            src/backend/ProjectTime.Api/Modules/MicrosoftSsoConnectionProfilesModule.cs
+            src/backend/ProjectTime.Api/Modules/MicrosoftSsoRuntimeCompatibility.cs
+            src/backend/ProjectTime.Api/Modules/AzureDirectoryImportModule.cs
+            src/frontend/project-time-web/src/MicrosoftIntegrationDualConnectionPortal.jsx
+            src/frontend/project-time-web/src/microsoft-integration-compatibility.js
+            src/frontend/project-time-web/src/microsoft-integration-portal.css
+            src/frontend/project-time-web/src/module-availability-registry.js
+            tests/test-microsoft-integration-migration-045.sh
+            tests/test-microsoft-sso-connection-migration-046.sh
+            tests/test-microsoft-integration-connection-carryover-047.sh
+          )
+          for file in "${required_files[@]}"; do test -f "release/$file"; done
+          test -f control/scripts/apply-microsoft-integration-test-migration.sh
+          test -f control/scripts/run-microsoft-integration-test-migration-job.sh
+          test -f control/scripts/wait-containerapp-ready-revision.sh
+
+          grep -Fq '047_microsoft_integration_connection_carryover' release/database/migrations/047_microsoft_integration_connection_carryover.sql
+          grep -Fq "FROM azure_entra_settings settings" release/database/migrations/047_microsoft_integration_connection_carryover.sql
+          grep -Fq "module_number = '067'" release/database/migrations/047_microsoft_integration_connection_carryover.sql
+          grep -Fq "'module062IdentityProfile', 'services'" release/database/migrations/047_microsoft_integration_connection_carryover.sql
+          grep -Fq "'globalMailTransport', 'services'" release/database/migrations/047_microsoft_integration_connection_carryover.sql
+          grep -Fq "displayName: 'Microsoft Integration Connection'" release/src/frontend/project-time-web/src/module-availability-registry.js
+          grep -Fq '.entra-secret-center[data-module="065"]' release/src/frontend/project-time-web/src/microsoft-integration-compatibility.js
+          grep -Fq '.azure-config-card, .azure-sync-summary-card' release/src/frontend/project-time-web/src/microsoft-integration-compatibility.js
+          grep -Fq 'Microsoft 365 / SMTP' release/src/frontend/project-time-web/src/MicrosoftIntegrationDualConnectionPortal.jsx
+          grep -Fq 'Module 062 identity/profile/presence' release/src/frontend/project-time-web/src/MicrosoftIntegrationDualConnectionPortal.jsx
+
+          bash -n control/scripts/apply-microsoft-integration-test-migration.sh
+          bash -n control/scripts/run-microsoft-integration-test-migration-job.sh
+          bash -n control/scripts/wait-containerapp-ready-revision.sh
+          bash release/tests/test-microsoft-integration-migration-045.sh
+          bash release/tests/test-microsoft-sso-connection-migration-046.sh
+          bash release/tests/test-microsoft-integration-connection-carryover-047.sh
+          echo "target_commit=$TARGET_COMMIT" >> "$GITHUB_OUTPUT"
+          echo '::warning::A green run proves migration and deployment integrity. Signed-in SSO, Graph, Entra import, Module 057 calendar, Module 062 identity, and Microsoft 365/SMTP UAT remain required.'
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify database environment configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t ENV_NAMES < <(az containerapp show \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_API_APP }}' \
+            --query 'properties.template.containers[0].env[].name' -o tsv)
+          printf '%s\n' "${ENV_NAMES[@]}" | sort -u > /tmp/microsoft-connection-api-env-names
+          for name in PTP_DB_HOST PTP_DB_PORT PTP_DB_NAME PTP_DB_USER PTP_DB_PASSWORD; do
+            grep -Fxq "$name" /tmp/microsoft-connection-api-env-names || { echo "Missing required API environment variable: $name" >&2; exit 1; }
+          done
+          echo 'MICROSOFT_CONNECTION_DATABASE_CONFIGURATION=COMPLETE'
+
+      - name: Load test database connection
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+        run: bash control/scripts/export-pr55-test-database-url.sh
+
+      - name: Capture current immutable API and web images
+        id: before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RAW_API="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+          RAW_WEB="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query 'properties.template.containers[0].image' -o tsv)"
+          API_MODE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query 'properties.configuration.activeRevisionsMode' -o tsv)"
+          WEB_MODE="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query 'properties.configuration.activeRevisionsMode' -o tsv)"
+          [[ -n "$RAW_API" && -n "$RAW_WEB" && "${API_MODE,,}" == single && "${WEB_MODE,,}" == single ]]
+
+          resolve_digest() {
+            local image="$1" registry='${{ vars.AZURE_ACR_NAME }}.azurecr.io/' relative repository digest
+            case "$image" in
+              "$registry"*@sha256:*) printf '%s\n' "$image"; return ;;
+              "$registry"*:*) ;;
+              *) echo "Image is outside approved ACR: $image" >&2; return 1 ;;
+            esac
+            relative="${image#"$registry"}"
+            repository="${relative%:*}"
+            digest="$(az acr repository show --name '${{ vars.AZURE_ACR_NAME }}' --image "$relative" --query digest -o tsv)"
+            [[ "$digest" == sha256:* ]]
+            printf '%s%s@%s\n' "$registry" "$repository" "$digest"
+          }
+
+          echo "old_api_image=$(resolve_digest "$RAW_API")" >> "$GITHUB_OUTPUT"
+          echo "old_web_image=$(resolve_digest "$RAW_WEB")" >> "$GITHUB_OUTPUT"
+
+      - name: Build immutable API and web images
+        id: build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SHA='${{ steps.release.outputs.target_commit }}'
+          API_REPO='project-health-dashboard-api'
+          WEB_REPO='project-health-dashboard-web'
+          API_DIGEST="$(control/scripts/build-pr55-acr-image.sh '${{ vars.AZURE_ACR_NAME }}' "$API_REPO:microsoft-connection-$SHA" release/deployment/containers/api/Dockerfile release)"
+          WEB_DIGEST="$(control/scripts/build-pr55-acr-image.sh '${{ vars.AZURE_ACR_NAME }}' "$WEB_REPO:microsoft-connection-$SHA" release/deployment/containers/web/Dockerfile release)"
+          [[ "$API_DIGEST" == sha256:* && "$WEB_DIGEST" == sha256:* ]]
+          echo "api_image=${{ vars.AZURE_ACR_NAME }}.azurecr.io/$API_REPO@$API_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "web_image=${{ vars.AZURE_ACR_NAME }}.azurecr.io/$WEB_REPO@$WEB_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Build checksum-pinned migrations 045 046 047 image
+        id: migration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CONTEXT="$RUNNER_TEMP/microsoft-connection-migrator-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 0700 "$CONTEXT/migrations"
+          install -m 0644 control/deployment/containers/pr55-migrator/Dockerfile "$CONTEXT/Dockerfile"
+          install -m 0755 control/scripts/apply-microsoft-integration-test-migration.sh "$CONTEXT/apply-pr55-test-migrations.sh"
+          for migration in \
+            045_microsoft_integration_consolidation.sql \
+            046_microsoft_sso_connection_profiles.sql \
+            047_microsoft_integration_connection_carryover.sql; do
+            install -m 0644 "release/database/migrations/$migration" "$CONTEXT/migrations/$migration"
+          done
+          (
+            cd "$CONTEXT/migrations"
+            sha256sum \
+              045_microsoft_integration_consolidation.sql \
+              046_microsoft_sso_connection_profiles.sql \
+              047_microsoft_integration_connection_carryover.sql > SHA256SUMS
+          )
+          printf '%s\n' '${{ steps.release.outputs.target_commit }}' > "$CONTEXT/release-commit"
+          DIGEST="$(control/scripts/build-pr55-acr-image.sh '${{ vars.AZURE_ACR_NAME }}' "project-health-dashboard-microsoft-connection-migrator:${{ steps.release.outputs.target_commit }}-${GITHUB_SHA:0:12}" "$CONTEXT/Dockerfile" "$CONTEXT")"
+          [[ "$DIGEST" == sha256:* ]]
+          echo "image=${{ vars.AZURE_ACR_NAME }}.azurecr.io/project-health-dashboard-microsoft-connection-migrator@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Apply or verify migrations 045 046 047 inside private network
+        shell: bash
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+          MICROSOFT_INTEGRATION_MIGRATION_IMAGE: ${{ steps.migration.outputs.image }}
+          MICROSOFT_INTEGRATION_MIGRATION_JOB_NAME: msconn-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash control/scripts/run-microsoft-integration-test-migration-job.sh
+
+      - name: Deploy API candidate
+        id: deploy_api
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SUFFIX="msconnapi-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          REVISION="${{ vars.AZURE_API_APP }}--${SUFFIX}"
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          az containerapp update \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_API_APP }}' \
+            --image '${{ steps.build.outputs.api_image }}' \
+            --set-env-vars PROJECTPULSE_ENVIRONMENT=test PROJECTPULSE_SOURCE_COMMIT='${{ steps.release.outputs.target_commit }}' \
+            --revision-suffix "$SUFFIX" --output none
+
+      - name: Wait for exact API candidate revision
+        shell: bash
+        run: |
+          bash control/scripts/wait-containerapp-ready-revision.sh \
+            '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            '${{ vars.AZURE_API_APP }}' \
+            '${{ steps.deploy_api.outputs.revision }}' \
+            '${{ steps.build.outputs.api_image }}' 60 10
+
+      - name: Validate protected Microsoft API routes
+        id: validate_api
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE='${{ vars.PUBLIC_URL }}'; BASE="${BASE%/}"
+          request_status() {
+            local method="$1" url="$2" body="${3:-}" args=(-sS -X "$method" -o /tmp/msconn-body -w '%{http_code}' -H 'Cache-Control: no-cache, no-store')
+            [[ -n "$body" ]] && args+=(-H 'Content-Type: application/json' --data "$body")
+            curl "${args[@]}" "$url?release_check=msconn-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" || true
+          }
+          expect() {
+            local name="$1" method="$2" url="$3" expected="$4" body="${5:-}" status
+            status="$(request_status "$method" "$url" "$body")"
+            echo "PROBE name=$name status=$status"
+            [[ ",$expected," == *",$status,"* ]] || { cat /tmp/msconn-body >&2 || true; return 1; }
+          }
+          expect health GET "$BASE/health" '200'
+          expect version GET "$BASE/api/version" '200'
+          expect overview GET "$BASE/api/microsoft-integration/overview" '401,403'
+          expect legacy-mail GET "$BASE/api/global-mail/configuration" '401,403'
+          expect directory-import POST "$BASE/api/microsoft-integration/directory-users/import-selected" '401,403' '{}'
+          expect graph-secret PUT "$BASE/api/microsoft-integration/client-secret" '401,403' '{}'
+          expect graph-test POST "$BASE/api/microsoft-integration/test-connection" '401,403' '{}'
+          expect sso-readiness GET "$BASE/api/microsoft-integration/sso-readiness" '401,403'
+          expect sso-secret PUT "$BASE/api/microsoft-integration/sso-client-secret" '401,403' '{}'
+          expect sso-test POST "$BASE/api/microsoft-integration/sso-test" '401,403' '{"tenantId":"00000000-0000-0000-0000-000000000000"}'
+          expect sso-apply POST "$BASE/api/microsoft-integration/sso-apply-profile" '401,403' '{}'
+          echo 'MICROSOFT_CONNECTION_API_DEPLOYMENT_INTEGRITY=READY'
+
+      - name: Deploy web candidate
+        id: deploy_web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SUFFIX="msconnweb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          REVISION="${{ vars.AZURE_WEB_APP }}--${SUFFIX}"
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          az containerapp update \
+            -g '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            -n '${{ vars.AZURE_WEB_APP }}' \
+            --image '${{ steps.build.outputs.web_image }}' \
+            --revision-suffix "$SUFFIX" --output none
+
+      - name: Wait for exact web candidate revision
+        shell: bash
+        run: |
+          bash control/scripts/wait-containerapp-ready-revision.sh \
+            '${{ vars.AZURE_RESOURCE_GROUP }}' \
+            '${{ vars.AZURE_WEB_APP }}' \
+            '${{ steps.deploy_web.outputs.revision }}' \
+            '${{ steps.build.outputs.web_image }}' 60 10
+
+      - name: Validate served authoritative Microsoft assets
+        id: validate_web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          BASE='${{ vars.PUBLIC_URL }}'; BASE="${BASE%/}"
+          READY=false
+          for attempt in $(seq 1 36); do
+            BUSTER="msconn-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$attempt"
+            STATUS="$(curl -sSL -H 'Cache-Control: no-cache, no-store' -o /tmp/msconn-index -w '%{http_code}' "$BASE/?release_check=$BUSTER" || true)"
+            JS="$(sed -nE 's/.*src="([^"]+\.js)".*/\1/p' /tmp/msconn-index | head -1)"
+            CSS="$(sed -nE 's/.*href="([^"]+\.css)".*/\1/p' /tmp/msconn-index | head -1)"
+            if [[ "$STATUS" == 200 && -n "$JS" && -n "$CSS" ]]; then
+              case "$JS" in http*) JS_URL="$JS" ;; /*) JS_URL="$BASE$JS" ;; *) JS_URL="$BASE/$JS" ;; esac
+              case "$CSS" in http*) CSS_URL="$CSS" ;; /*) CSS_URL="$BASE$CSS" ;; *) CSS_URL="$BASE/$CSS" ;; esac
+              curl -sSL -H 'Cache-Control: no-cache, no-store' -o /tmp/msconn-app.js "$JS_URL?release_check=$BUSTER" || true
+              curl -sSL -H 'Cache-Control: no-cache, no-store' -o /tmp/msconn-app.css "$CSS_URL?release_check=$BUSTER" || true
+              if grep -Fq 'Microsoft Integration Connection' /tmp/msconn-app.js \
+                && grep -Fq 'data-microsoft-integration-authoritative' /tmp/msconn-app.js \
+                && grep -Fq 'Preview and import Entra users' /tmp/msconn-app.js \
+                && grep -Fq 'Microsoft 365 / SMTP' /tmp/msconn-app.js \
+                && grep -Fq 'Module 062 identity/profile/presence' /tmp/msconn-app.js \
+                && grep -Fq '.entra-secret-center[data-module="065"]' /tmp/msconn-app.css \
+                && grep -Fq '.route-azure-admin .azure-config-card' /tmp/msconn-app.css \
+                && grep -Fq '.route-azure-admin .azure-sync-summary-card' /tmp/msconn-app.css; then
+                READY=true
+                break
+              fi
+            fi
+            sleep 10
+          done
+          [[ "$READY" == true ]] || { echo 'Authoritative Microsoft Integration Connection assets were not served.' >&2; exit 1; }
+
+          READY_API_REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query 'properties.latestReadyRevisionName' -o tsv)"
+          READY_WEB_REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query 'properties.latestReadyRevisionName' -o tsv)"
+          [[ "$READY_API_REVISION" == '${{ steps.deploy_api.outputs.revision }}' ]]
+          [[ "$READY_WEB_REVISION" == '${{ steps.deploy_web.outputs.revision }}' ]]
+          READY_API_IMAGE="$(az containerapp revision show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --revision "$READY_API_REVISION" --query 'properties.template.containers[0].image' -o tsv)"
+          READY_WEB_IMAGE="$(az containerapp revision show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --revision "$READY_WEB_REVISION" --query 'properties.template.containers[0].image' -o tsv)"
+          [[ "$READY_API_IMAGE" == '${{ steps.build.outputs.api_image }}' ]]
+          [[ "$READY_WEB_IMAGE" == '${{ steps.build.outputs.web_image }}' ]]
+          echo "ready_api_revision=$READY_API_REVISION" >> "$GITHUB_OUTPUT"
+          echo "ready_web_revision=$READY_WEB_REVISION" >> "$GITHUB_OUTPUT"
+          echo "ready_api_image=$READY_API_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "ready_web_image=$READY_WEB_IMAGE" >> "$GITHUB_OUTPUT"
+          echo 'MICROSOFT_INTEGRATION_CONNECTION_ASSETS=DEPLOYED'
+          echo 'AUTHENTICATED_MICROSOFT_CONNECTION_UAT=REQUIRED'
+
+      - name: Write deployment evidence
+        if: success()
+        shell: bash
+        run: |
+          mkdir -p evidence
+          cat > evidence/microsoft-integration-connection-test.json <<JSON
+          {"environment":"test","releaseCommit":"${{ steps.release.outputs.target_commit }}","workflowCommit":"${{ github.sha }}","runId":"${{ github.run_id }}","runAttempt":"${{ github.run_attempt }}","moduleName":"Microsoft Integration Connection","modules":["010","057","062","065"],"retiredModule":"067","migrations":["045_microsoft_integration_consolidation","046_microsoft_sso_connection_profiles","047_microsoft_integration_connection_carryover"],"configurationCarryover":["module010_tenant_sync","module067_global_mail"],"secretMutation":false,"apiImage":"${{ steps.validate_web.outputs.ready_api_image }}","webImage":"${{ steps.validate_web.outputs.ready_web_image }}","readyApiRevision":"${{ steps.validate_web.outputs.ready_api_revision }}","readyWebRevision":"${{ steps.validate_web.outputs.ready_web_revision }}","previousApiImage":"${{ steps.before.outputs.old_api_image }}","previousWebImage":"${{ steps.before.outputs.old_web_image }}","deploymentIntegrity":"passed","authenticatedUatRequired":true,"functionalUatStatus":"pending-user-session-validation"}
+          JSON
+
+      - name: Upload deployment evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: microsoft-integration-connection-test-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/microsoft-integration-connection-test.json
+          retention-days: 30
+
+      - name: Roll back API and web images on failure
+        if: ${{ failure() && (steps.deploy_api.outputs.started == 'true' || steps.deploy_web.outputs.started == 'true') }}
+        shell: bash
+        run: |
+          set +e
+          if [[ '${{ steps.deploy_api.outputs.started }}' == 'true' ]]; then
+            az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' \
+              --image '${{ steps.before.outputs.old_api_image }}' \
+              --revision-suffix "msconnapirb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output none
+          fi
+          if [[ '${{ steps.deploy_web.outputs.started }}' == 'true' ]]; then
+            az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' \
+              --image '${{ steps.before.outputs.old_web_image }}' \
+              --revision-suffix "msconnwebrb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output none
+          fi

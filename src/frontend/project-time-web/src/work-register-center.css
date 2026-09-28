@@ -1,0 +1,1829 @@
+.work-register-center {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.work-register-header,
+.work-register-summary,
+.work-register-toolbar,
+.work-register-totalbar,
+.work-register-table-wrap {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+}
+
+.work-register-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+}
+
+.work-register-header h2 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.work-register-center .muted,
+.work-register-table small,
+.work-register-summary small,
+.work-register-summary span {
+  color: #64748b;
+}
+
+.work-register-banner {
+  border-radius: 14px;
+  padding: 0.85rem 1rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid rgba(59, 130, 246, 0.26);
+}
+
+.work-register-banner.error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.28);
+}
+
+.work-register-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  padding: 0.75rem;
+}
+
+.work-register-summary article {
+  display: grid;
+  gap: 0.25rem;
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.work-register-summary strong {
+  font-size: 1.25rem;
+}
+
+.work-register-toolbar {
+  display: grid;
+  grid-template-columns: 2fr repeat(6, minmax(145px, 1fr));
+  gap: 0.65rem;
+  align-items: end;
+  padding: 0.75rem;
+  position: sticky;
+  top: 0;
+  z-index: 7;
+}
+
+.work-register-toolbar label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 800;
+  color: #334155;
+  font-size: 0.82rem;
+}
+
+.work-register-toolbar input,
+.work-register-toolbar select {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-totalbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  padding: 0.65rem;
+}
+
+.work-register-totalbar span {
+  border-radius: 999px;
+  padding: 0.4rem 0.7rem;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 0.82rem;
+}
+
+.work-register-table-wrap {
+  overflow: auto;
+  max-height: calc(100vh - 360px);
+}
+
+.work-register-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1360px;
+  font-size: 0.84rem;
+}
+
+.work-register-table th,
+.work-register-table td {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  padding: 0.7rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.work-register-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: #ffffff;
+}
+
+.work-register-table td strong,
+.work-register-table td small {
+  display: block;
+}
+
+.work-register-pill,
+.burn-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  margin: 0 0.25rem 0.25rem 0;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.lifecycle-active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.lifecycle-closed {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.burn-normal {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.burn-watch {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.burn-warning {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.burn-critical,
+.burn-overrun {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.engineer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.engineer-list span {
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+/* 055C_WORK_REGISTER_ROUTE_ISOLATION_START */
+body[data-projectpulse-active-route="work-register"] section.panel:not(#work-register):not(.work-register-route-panel) {
+  display: none !important;
+}
+
+body[data-projectpulse-active-route="work-register"] main > section:not(#work-register):not(.work-register-route-panel),
+body[data-projectpulse-active-route="work-register"] .app-main > section:not(#work-register):not(.work-register-route-panel),
+body[data-projectpulse-active-route="work-register"] .dashboard-main > section:not(#work-register):not(.work-register-route-panel),
+body[data-projectpulse-active-route="work-register"] .workspace-main > section:not(#work-register):not(.work-register-route-panel) {
+  display: none !important;
+}
+
+body[data-projectpulse-active-route="work-register"] #work-register,
+body[data-projectpulse-active-route="work-register"] .work-register-route-panel {
+  display: block !important;
+  visibility: visible !important;
+  min-height: auto !important;
+  margin-top: 0 !important;
+}
+
+body[data-projectpulse-active-route="work-register"] #work-register .work-register-center {
+  display: grid !important;
+}
+/* 055C_WORK_REGISTER_ROUTE_ISOLATION_END */
+
+/* 055D_CREATE_WORK_REGISTER_ROUTE_ISOLATION_START */
+body[data-projectpulse-active-route="create-work-register"] section.panel:not(#create-work-register):not(.work-register-route-panel) {
+  display: none !important;
+}
+
+body[data-projectpulse-active-route="create-work-register"] main > section:not(#create-work-register):not(.work-register-route-panel),
+body[data-projectpulse-active-route="create-work-register"] .app-main > section:not(#create-work-register):not(.work-register-route-panel),
+body[data-projectpulse-active-route="create-work-register"] .dashboard-main > section:not(#create-work-register):not(.work-register-route-panel),
+body[data-projectpulse-active-route="create-work-register"] .workspace-main > section:not(#create-work-register):not(.work-register-route-panel) {
+  display: none !important;
+}
+
+body[data-projectpulse-active-route="create-work-register"] #create-work-register,
+body[data-projectpulse-active-route="create-work-register"] .work-register-route-panel {
+  display: block !important;
+  visibility: visible !important;
+  min-height: auto !important;
+  margin-top: 0 !important;
+}
+
+body[data-projectpulse-active-route="create-work-register"] #create-work-register .work-register-center {
+  display: grid !important;
+}
+/* 055D_CREATE_WORK_REGISTER_ROUTE_ISOLATION_END */
+
+@media (max-width: 1200px) {
+  .work-register-summary,
+  .work-register-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .work-register-header {
+    flex-direction: column;
+  }
+
+  .work-register-table-wrap {
+    max-height: 620px;
+  }
+}
+
+[data-theme="dark"] .work-register-header,
+[data-theme="dark"] .work-register-summary,
+[data-theme="dark"] .work-register-toolbar,
+[data-theme="dark"] .work-register-totalbar,
+[data-theme="dark"] .work-register-table-wrap {
+  background: rgba(15, 23, 42, 0.94);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-summary article {
+  background: rgba(30, 41, 59, 0.78);
+}
+
+[data-theme="dark"] .work-register-toolbar input,
+[data-theme="dark"] .work-register-toolbar select {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+[data-theme="dark"] .work-register-table thead th {
+  background: #0f172a;
+}
+
+/* 055C_2_WORK_REGISTER_EDIT_DRAWER_START */
+.work-register-row-action {
+  margin-top: 0.45rem;
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 800;
+  font-size: 0.75rem;
+  padding: 0.32rem 0.6rem;
+  cursor: pointer;
+}
+
+.work-register-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.work-register-drawer {
+  width: min(760px, 96vw);
+  height: 100vh;
+  overflow: auto;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: -28px 0 70px rgba(15, 23, 42, 0.24);
+  padding: 1rem;
+  display: grid;
+  align-content: start;
+  gap: 0.85rem;
+}
+
+.work-register-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  padding-bottom: 0.75rem;
+}
+
+.work-register-drawer-header h3 {
+  margin: 0;
+}
+
+.work-register-edit-notice {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+}
+
+.work-register-edit-notice.allowed {
+  background: #ecfdf5;
+  color: #166534;
+  border-color: rgba(34, 197, 94, 0.32);
+}
+
+.work-register-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.work-register-edit-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 800;
+  color: #334155;
+  font-size: 0.84rem;
+}
+
+.work-register-edit-form input,
+.work-register-edit-form select,
+.work-register-edit-form textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.6rem 0.7rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-edit-form input:disabled,
+.work-register-edit-form select:disabled,
+.work-register-edit-form textarea:disabled {
+  background: #f1f5f9;
+  color: #64748b;
+  cursor: not-allowed;
+}
+
+.work-register-edit-form .full-width,
+.work-register-drawer-actions {
+  grid-column: 1 / -1;
+}
+
+.work-register-drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  padding-top: 0.5rem;
+}
+
+@media (max-width: 760px) {
+  .work-register-edit-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="dark"] .work-register-drawer {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .work-register-edit-notice {
+  background: rgba(30, 41, 59, 0.78);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .work-register-edit-form input,
+[data-theme="dark"] .work-register-edit-form select,
+[data-theme="dark"] .work-register-edit-form textarea {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+/* 055C_2_WORK_REGISTER_EDIT_DRAWER_END */
+
+/* 055C_5_WORK_REGISTER_DETAIL_TABS_START */
+.work-register-drawer-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 0.45rem;
+}
+
+.work-register-drawer-tabs button {
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.42rem 0.7rem;
+}
+
+.work-register-drawer-tabs button.active {
+  background: #0f5f9f;
+  border-color: #0f5f9f;
+  color: #ffffff;
+}
+
+.work-register-detail-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.work-register-detail-panel h4,
+.work-register-detail-panel h5 {
+  margin: 0;
+}
+
+.work-register-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.work-register-detail-grid article,
+.work-register-detail-summary span {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.work-register-detail-grid article small {
+  color: #64748b;
+}
+
+.work-register-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+@media (max-width: 760px) {
+  .work-register-detail-grid,
+  .work-register-detail-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="dark"] .work-register-drawer-tabs,
+[data-theme="dark"] .work-register-detail-grid article,
+[data-theme="dark"] .work-register-detail-summary span {
+  background: rgba(30, 41, 59, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-drawer-tabs button {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+}
+/* 055C_5_WORK_REGISTER_DETAIL_TABS_END */
+
+/* 055C_6_TASK_ENGINEER_ASSIGNMENT_START */
+.work-register-task-assignment-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.work-register-task-assignment-card {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 0.7fr 0.8fr;
+  gap: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 0.85rem;
+}
+
+.work-register-task-assignment-card > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.work-register-task-assignment-card small {
+  color: #64748b;
+}
+
+.work-register-task-assignment-card label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 800;
+  color: #334155;
+  font-size: 0.82rem;
+}
+
+.work-register-task-assignment-card input,
+.work-register-task-assignment-card select,
+.work-register-task-assignment-card textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-task-assignment-card .checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.work-register-task-assignment-card .checkbox-line input {
+  width: auto;
+}
+
+.work-register-task-assignment-card .full-width,
+.work-register-task-assignment-actions {
+  grid-column: 1 / -1;
+}
+
+.work-register-task-assignment-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 920px) {
+  .work-register-task-assignment-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="dark"] .work-register-task-assignment-card {
+  background: rgba(30, 41, 59, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-task-assignment-card input,
+[data-theme="dark"] .work-register-task-assignment-card select,
+[data-theme="dark"] .work-register-task-assignment-card textarea {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+/* 055C_6_TASK_ENGINEER_ASSIGNMENT_END */
+
+/* 055C_7_MULTI_ENGINEER_ROSTER_START */
+.work-register-roster-panel {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 16px;
+  padding: 0.75rem;
+  background: #eff6ff;
+}
+
+.work-register-roster-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.work-register-roster-toolbar span {
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1d4ed8;
+  font-weight: 800;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+.work-register-roster-row {
+  display: grid;
+  grid-template-columns: 1.3fr 0.55fr 0.55fr 0.8fr repeat(3, auto) auto;
+  gap: 0.55rem;
+  align-items: end;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 0.65rem;
+}
+
+.work-register-default-classification {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+  border-radius: 14px;
+  background: #ecfdf5;
+  color: #166534;
+  font-weight: 800;
+  padding: 0.65rem;
+}
+
+.work-register-default-classification button {
+  border: 1px solid rgba(34, 197, 94, 0.36);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #166534;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+}
+
+.secondary-action.danger {
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+@media (max-width: 1200px) {
+  .work-register-roster-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .work-register-roster-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="dark"] .work-register-roster-panel {
+  background: rgba(30, 64, 175, 0.18);
+  border-color: rgba(96, 165, 250, 0.25);
+}
+
+[data-theme="dark"] .work-register-roster-row,
+[data-theme="dark"] .work-register-roster-toolbar span {
+  background: rgba(15, 23, 42, 0.92);
+}
+
+[data-theme="dark"] .work-register-default-classification {
+  background: rgba(20, 83, 45, 0.38);
+  color: #bbf7d0;
+}
+/* 055C_7_MULTI_ENGINEER_ROSTER_END */
+
+/* 055C_8_CHANGE_ORDER_COSTING_START */
+.work-register-change-order-toggle {
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 900;
+  padding: 0.75rem;
+}
+
+.work-register-change-order-form {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 18px;
+  background: #f8fafc;
+  padding: 0.9rem;
+}
+
+.work-register-change-order-lines {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.work-register-change-order-line {
+  display: grid;
+  grid-template-columns: 1.25fr 0.55fr 0.55fr 0.65fr 0.55fr;
+  gap: 0.55rem;
+  align-items: end;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 0.65rem;
+}
+
+.work-register-change-order-line label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #334155;
+}
+
+.work-register-change-order-line input,
+.work-register-change-order-form textarea,
+.work-register-change-order-form input {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-change-order-line span {
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #166534;
+  font-weight: 900;
+  padding: 0.45rem 0.65rem;
+  text-align: center;
+}
+
+.work-register-change-order-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-radius: 16px;
+  background: #0f5f9f;
+  color: #ffffff;
+  padding: 0.85rem;
+  font-weight: 900;
+}
+
+@media (max-width: 960px) {
+  .work-register-change-order-line {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .work-register-change-order-line {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="dark"] .work-register-change-order-toggle,
+[data-theme="dark"] .work-register-change-order-form {
+  background: rgba(30, 64, 175, 0.18);
+  border-color: rgba(96, 165, 250, 0.25);
+}
+
+[data-theme="dark"] .work-register-change-order-line {
+  background: rgba(15, 23, 42, 0.92);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-change-order-line input,
+[data-theme="dark"] .work-register-change-order-form textarea,
+[data-theme="dark"] .work-register-change-order-form input {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+/* 055C_8_CHANGE_ORDER_COSTING_END */
+
+/* 055C_9_DOCUMENT_MANAGEMENT_START */
+.work-register-document-form {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 18px;
+  background: #f8fafc;
+  padding: 0.9rem;
+}
+
+.work-register-document-form h5 {
+  margin: 0;
+}
+
+.work-register-document-form input,
+.work-register-document-form select,
+.work-register-document-form textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-document-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.work-register-document-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.85rem;
+  align-items: start;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 0.85rem;
+}
+
+.work-register-document-card.archived {
+  opacity: 0.68;
+  background: #f1f5f9;
+}
+
+.work-register-document-card > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.work-register-document-card small {
+  color: #64748b;
+}
+
+.work-register-document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.work-register-document-actions a {
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-weight: 900;
+  padding: 0.4rem 0.65rem;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .work-register-document-card {
+    grid-template-columns: 1fr;
+  }
+
+  .work-register-document-actions {
+    justify-content: flex-start;
+  }
+}
+
+[data-theme="dark"] .work-register-document-form,
+[data-theme="dark"] .work-register-document-card {
+  background: rgba(30, 41, 59, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-document-card.archived {
+  background: rgba(15, 23, 42, 0.65);
+}
+
+[data-theme="dark"] .work-register-document-form input,
+[data-theme="dark"] .work-register-document-form select,
+[data-theme="dark"] .work-register-document-form textarea {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+/* 055C_9_DOCUMENT_MANAGEMENT_END */
+
+/* 055C_10_LOCAL_DOCUMENT_UPLOAD_START */
+.work-register-document-upload-form {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid rgba(14, 165, 233, 0.28);
+  border-radius: 18px;
+  background: #f0f9ff;
+  padding: 0.9rem;
+}
+
+.work-register-document-upload-form h5 {
+  margin: 0;
+}
+
+.work-register-document-upload-form input,
+.work-register-document-upload-form select,
+.work-register-document-upload-form textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-document-upload-form input[type="file"] {
+  padding: 0.45rem;
+}
+
+[data-theme="dark"] .work-register-document-upload-form {
+  background: rgba(12, 74, 110, 0.28);
+  border-color: rgba(125, 211, 252, 0.25);
+}
+
+[data-theme="dark"] .work-register-document-upload-form input,
+[data-theme="dark"] .work-register-document-upload-form select,
+[data-theme="dark"] .work-register-document-upload-form textarea {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+/* 055C_10_LOCAL_DOCUMENT_UPLOAD_END */
+
+/* 055D_1_INTAKE_WIZARD_GSD_SOW_START */
+.work-register-create-button {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 40;
+  border: 0;
+  border-radius: 999px;
+  background: #0f5f9f;
+  color: #ffffff;
+  font-weight: 900;
+  box-shadow: 0 16px 40px rgba(15, 95, 159, 0.26);
+  cursor: pointer;
+  padding: 0.8rem 1.1rem;
+}
+
+.work-register-create-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.work-register-center.create-mode > .work-register-summary,
+.work-register-center.create-mode > .work-register-toolbar,
+.work-register-center.create-mode > .work-register-table-wrap {
+  display: none;
+}
+
+.work-register-center.create-mode .work-register-create-overlay {
+  position: static;
+  inset: auto;
+  display: block;
+  background: transparent;
+}
+
+.work-register-center.create-mode .work-register-create-wizard {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  box-shadow: none;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 1rem;
+}
+
+.work-register-source-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.work-register-source-choice label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.65rem;
+  align-items: start;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 0.8rem;
+  padding: 0.9rem;
+  cursor: pointer;
+}
+
+.work-register-source-choice label.selected {
+  border-color: #0f5f9f;
+  background: rgba(15, 95, 159, 0.08);
+}
+
+.work-register-source-choice input {
+  grid-row: 1 / span 2;
+  margin-top: 0.15rem;
+}
+
+.work-register-source-choice small {
+  color: #64748b;
+}
+
+.work-register-sell-authority-notice {
+  margin: 0.9rem 0;
+  border-left: 4px solid #0f5f9f;
+  border-radius: 0.65rem;
+  background: rgba(15, 95, 159, 0.08);
+  padding: 0.85rem 1rem;
+}
+
+.work-register-sell-authority-notice p {
+  margin: 0.3rem 0 0;
+  color: #475569;
+}
+
+@media (max-width: 760px) {
+  .work-register-source-choice {
+    grid-template-columns: 1fr;
+  }
+}
+
+.work-register-create-wizard {
+  width: min(980px, 98vw);
+  height: 100vh;
+  overflow: auto;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: -24px 0 60px rgba(15, 23, 42, 0.22);
+  padding: 1rem;
+}
+
+.work-register-create-wizard > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  padding-bottom: 0.8rem;
+}
+
+.work-register-create-wizard > header span {
+  color: #0f5f9f;
+  font-size: 0.75rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.work-register-create-wizard > header h3 {
+  margin: 0.2rem 0;
+}
+
+.work-register-create-wizard > header p {
+  margin: 0;
+  color: #64748b;
+}
+
+.work-register-create-wizard > header button {
+  align-self: start;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0.45rem 0.75rem;
+}
+
+.work-register-intake-form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.work-register-intake-form section {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 18px;
+  background: #f8fafc;
+  padding: 0.9rem;
+}
+
+.work-register-intake-form section h4 {
+  margin: 0;
+}
+
+.work-register-intake-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 900;
+  color: #334155;
+}
+
+.work-register-intake-form input,
+.work-register-intake-form select,
+.work-register-intake-form textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.work-register-intake-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.work-register-intake-upload-card {
+  border: 1px dashed rgba(14, 165, 233, 0.5);
+  border-radius: 16px;
+  background: #f0f9ff;
+  padding: 0.8rem;
+}
+
+.work-register-intake-upload-card small {
+  color: #64748b;
+}
+
+.work-register-intake-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.work-register-intake-result {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 16px;
+  background: #ecfdf5;
+  color: #166534;
+  padding: 0.8rem;
+}
+
+.work-register-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  padding-bottom: 2rem;
+}
+
+@media (max-width: 860px) {
+  .work-register-intake-upload-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .work-register-create-wizard {
+    width: 100vw;
+  }
+}
+
+[data-theme="dark"] .work-register-create-wizard {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .work-register-intake-form section {
+  background: rgba(30, 41, 59, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-intake-upload-card {
+  background: rgba(12, 74, 110, 0.28);
+  border-color: rgba(125, 211, 252, 0.25);
+}
+
+[data-theme="dark"] .work-register-intake-form input,
+[data-theme="dark"] .work-register-intake-form select,
+[data-theme="dark"] .work-register-intake-form textarea,
+[data-theme="dark"] .work-register-create-wizard > header button {
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+/* 055D_1_INTAKE_WIZARD_GSD_SOW_END */
+
+/* 055D_2_GSD_EXTRACTION_REVIEW_START */
+.work-register-intake-review-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.work-register-intake-package-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.work-register-intake-package-list article {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.75rem;
+  align-items: start;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 0.75rem;
+}
+
+.work-register-intake-package-list article > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.work-register-intake-package-list article > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.work-register-intake-package-list small {
+  color: #64748b;
+}
+
+.work-register-intake-review-panel {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid rgba(34, 197, 94, 0.26);
+  border-radius: 18px;
+  background: #f0fdf4;
+  padding: 0.85rem;
+}
+
+.work-register-intake-review-panel h5 {
+  margin: 0;
+}
+
+.work-register-intake-review-panel textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 760px) {
+  .work-register-intake-package-list article {
+    grid-template-columns: 1fr;
+  }
+
+  .work-register-intake-package-list article > div:last-child {
+    justify-content: flex-start;
+  }
+}
+
+[data-theme="dark"] .work-register-intake-package-list article {
+  background: rgba(30, 41, 59, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-intake-review-panel {
+  background: rgba(20, 83, 45, 0.24);
+  border-color: rgba(74, 222, 128, 0.22);
+}
+/* 055D_2_GSD_EXTRACTION_REVIEW_END */
+
+/* 055D_2A_GSD_XLSX_EXTRACTION_REVIEW_START */
+.work-register-intake-review-panel textarea {
+  min-height: 7rem;
+}
+/* 055D_2A_GSD_XLSX_EXTRACTION_REVIEW_END */
+
+/* 055D_2B_INTAKE_UI_PARSER_REPAIR_START */
+.work-register-intake-form .work-register-edit-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.work-register-intake-review-panel textarea {
+  min-height: 7rem;
+}
+
+@media (max-width: 760px) {
+  .work-register-intake-form .work-register-edit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+/* 055D_2B_INTAKE_UI_PARSER_REPAIR_END */
+
+/* 055D_2C_CURRENT_EXTRACTION_REPAIR_START */
+.work-register-intake-review-panel select {
+  min-height: 2.4rem;
+}
+/* 055D_2C_CURRENT_EXTRACTION_REPAIR_END */
+
+/* 055D_2E_UPLOAD_EXTRACT_CURRENT_GSD_START */
+.work-register-intake-primary-submit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  border-radius: 16px;
+  background: #eff6ff;
+  padding: 0.75rem;
+}
+
+.work-register-intake-primary-submit .primary-action {
+  min-height: 2.6rem;
+}
+
+.work-register-intake-primary-submit .muted {
+  margin: 0;
+  max-width: 40rem;
+}
+
+[data-theme="dark"] .work-register-intake-primary-submit {
+  background: rgba(30, 64, 175, 0.2);
+  border-color: rgba(147, 197, 253, 0.25);
+}
+/* 055D_2E_UPLOAD_EXTRACT_CURRENT_GSD_END */
+
+/* 055D_2F_RATE_TASK_REVIEW_TABLES_START */
+.work-register-gsd-review-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.work-register-gsd-review-summary > div {
+  display: grid;
+  gap: 0.2rem;
+  border: 1px solid rgba(34, 197, 94, 0.24);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 0.75rem;
+}
+
+.work-register-gsd-review-summary span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.work-register-gsd-review-summary strong {
+  color: #0f172a;
+  font-size: 1rem;
+}
+
+.work-register-gsd-review-table {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid rgba(14, 165, 233, 0.22);
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 0.8rem;
+}
+
+.work-register-gsd-review-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.work-register-gsd-review-table-header h5 {
+  margin: 0;
+}
+
+.work-register-gsd-rate-grid,
+.work-register-gsd-task-grid {
+  display: grid;
+  gap: 0.35rem;
+  overflow-x: auto;
+}
+
+.work-register-gsd-rate-grid {
+  grid-template-columns: 4rem minmax(12rem, 0.8fr) minmax(18rem, 2fr) minmax(7rem, 0.7fr) minmax(7rem, 0.7fr) minmax(8rem, 0.8fr);
+}
+
+.work-register-gsd-task-grid {
+  grid-template-columns: 4rem minmax(8rem, 0.7fr) minmax(20rem, 2fr) minmax(12rem, 1fr) minmax(6rem, 0.55fr) minmax(6rem, 0.55fr) minmax(6rem, 0.55fr) minmax(7rem, 0.7fr);
+}
+
+.work-register-gsd-grid-heading {
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 900;
+  padding: 0 0.25rem;
+}
+
+.work-register-gsd-grid-row {
+  display: contents;
+}
+
+.work-register-gsd-grid-row input,
+.work-register-gsd-grid-row select {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0.45rem 0.5rem;
+}
+
+.work-register-gsd-grid-row strong {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  border-radius: 10px;
+  background: #ecfdf5;
+  color: #166534;
+  padding: 0.45rem 0.55rem;
+}
+
+.work-register-gsd-empty-review {
+  border: 1px dashed rgba(245, 158, 11, 0.45);
+  border-radius: 14px;
+  background: #fffbeb;
+  color: #92400e;
+  font-weight: 800;
+  padding: 0.75rem;
+}
+
+.work-register-gsd-json-details {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 0.75rem;
+}
+
+.work-register-gsd-json-details summary {
+  cursor: pointer;
+  font-weight: 900;
+  color: #334155;
+}
+
+.work-register-gsd-json-details[open] {
+  display: grid;
+  gap: 0.75rem;
+}
+
+@media (max-width: 980px) {
+  .work-register-gsd-review-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .work-register-gsd-review-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="dark"] .work-register-gsd-review-summary > div,
+[data-theme="dark"] .work-register-gsd-review-table,
+[data-theme="dark"] .work-register-gsd-json-details {
+  background: rgba(30, 41, 59, 0.78);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .work-register-gsd-review-summary strong,
+[data-theme="dark"] .work-register-gsd-grid-row input,
+[data-theme="dark"] .work-register-gsd-grid-row select {
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .work-register-gsd-grid-row input,
+[data-theme="dark"] .work-register-gsd-grid-row select {
+  background: rgba(15, 23, 42, 0.92);
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+[data-theme="dark"] .work-register-gsd-grid-row strong {
+  background: rgba(20, 83, 45, 0.35);
+  color: #bbf7d0;
+}
+/* 055D_2F_RATE_TASK_REVIEW_TABLES_END */
+
+/* 055D_2G_CONSOLIDATED_GSD_PARSER_START */
+.work-register-gsd-review-table .muted {
+  line-height: 1.35;
+}
+/* 055D_2G_CONSOLIDATED_GSD_PARSER_END */
+
+/* 055D_2H_HYUNDAI_TOYOTA_RATE_TASK_REPAIR_START */
+.work-register-gsd-review-table-header .muted {
+  max-width: 48rem;
+}
+/* 055D_2H_HYUNDAI_TOYOTA_RATE_TASK_REPAIR_END */
+
+/* 055D_2I_TOYOTA_HYUNDAI_TOTALS_PRICING_START */
+.work-register-gsd-review-table-header .muted {
+  max-width: 52rem;
+}
+/* 055D_2I_TOYOTA_HYUNDAI_TOTALS_PRICING_END */
+
+/* 055D_2I_REPAIRED_TOTALS_ROLLUP_SKU_MAPPING_START */
+.work-register-gsd-review-table-header .muted {
+  max-width: 56rem;
+}
+/* 055D_2I_REPAIRED_TOTALS_ROLLUP_SKU_MAPPING_END */
+
+/* 055D_3_INTAKE_ASSIGNMENT_REVIEW_START */
+.work-register-intake-assignment-review {
+  display: grid;
+  gap: 0.9rem;
+  border: 1px solid rgba(99, 102, 241, 0.24);
+  border-radius: 16px;
+  background: #eef2ff;
+  padding: 0.85rem;
+}
+
+.work-register-assignment-lead-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.work-register-intake-task-assignment-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.work-register-intake-task-assignment-card {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid rgba(129, 140, 248, 0.28);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 0.75rem;
+}
+
+.work-register-intake-task-assignment-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.8rem;
+}
+
+.work-register-intake-task-assignment-heading > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.work-register-intake-task-assignment-heading span {
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.work-register-intake-task-assignment-roster {
+  display: grid;
+  grid-template-columns: 5rem minmax(18rem, 2fr) minmax(7rem, 0.7fr) minmax(8rem, 0.75fr) minmax(8rem, 0.75fr);
+  gap: 0.35rem;
+  overflow-x: auto;
+}
+
+.work-register-assignment-grid-heading {
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 900;
+  padding: 0 0.25rem;
+}
+
+.work-register-assignment-grid-row {
+  display: contents;
+}
+
+.work-register-assignment-grid-row select,
+.work-register-assignment-grid-row input {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0.45rem 0.5rem;
+}
+
+.work-register-intake-task-assignment-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  color: #334155;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+@media (max-width: 880px) {
+  .work-register-assignment-lead-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .work-register-intake-task-assignment-heading,
+  .work-register-intake-task-assignment-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+[data-theme="dark"] .work-register-intake-assignment-review {
+  background: rgba(49, 46, 129, 0.25);
+  border-color: rgba(129, 140, 248, 0.28);
+}
+
+[data-theme="dark"] .work-register-intake-task-assignment-card {
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(129, 140, 248, 0.25);
+}
+
+[data-theme="dark"] .work-register-assignment-grid-row select,
+[data-theme="dark"] .work-register-assignment-grid-row input {
+  background: rgba(15, 23, 42, 0.92);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+/* 055D_3_INTAKE_ASSIGNMENT_REVIEW_END */
+
+/* 055D_3A_ASSIGNMENT_POOL_REPAIR_START */
+.work-register-intake-assignment-review select {
+  min-height: 2.35rem;
+}
+/* 055D_3A_ASSIGNMENT_POOL_REPAIR_END */
+
+/* 055D_3B_ROLE_BASED_ASSIGNMENT_POOLS_START */
+.work-register-assignment-save-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 14px;
+  background: #eff6ff;
+  padding: 0.75rem;
+}
+
+.work-register-assignment-save-bar .muted {
+  margin: 0;
+  max-width: 42rem;
+}
+
+.work-register-assignment-pool-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.work-register-assignment-pool-counts span {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 0.35rem 0.65rem;
+}
+
+[data-theme="dark"] .work-register-assignment-save-bar {
+  background: rgba(30, 64, 175, 0.24);
+  border-color: rgba(147, 197, 253, 0.25);
+}
+
+[data-theme="dark"] .work-register-assignment-pool-counts span {
+  background: rgba(15, 23, 42, 0.9);
+  border-color: rgba(148, 163, 184, 0.25);
+}
+/* 055D_3B_ROLE_BASED_ASSIGNMENT_POOLS_END */
+
+/* 055D_4E_RECOVER_INTAKE_UI_DIAGNOSE_SAVE_START */
+button[data-marker="055D_4E_TEST_FINAL_SAVE_BUTTON"] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+/* 055D_4E_RECOVER_INTAKE_UI_DIAGNOSE_SAVE_END */
+
+/* 055D_4F1_SAVE_DIAGNOSTIC_PM_POOL_START */
+button[data-marker="055D_4E_TEST_FINAL_SAVE_BUTTON"] {
+  pointer-events: auto;
+  cursor: pointer;
+  position: relative;
+  z-index: 5;
+}
+/* 055D_4F1_SAVE_DIAGNOSTIC_PM_POOL_END */
+
+/* 055D_4G_FINAL_SAVE_ALLOCATION_SYNC_START */
+button[data-marker="055D_4E_TEST_FINAL_SAVE_BUTTON"] {
+  font-weight: 900;
+  min-width: 18rem;
+}
+/* 055D_4G_FINAL_SAVE_ALLOCATION_SYNC_END */
+
+/* 055D_4J_SAVE_COMPLETION_BANNER_START */
+.projectpulse-save-completed-banner {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 99999;
+  max-width: 32rem;
+  padding: 1rem 1.15rem;
+  border-radius: 16px;
+  background: #0f766e;
+  color: #ffffff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+  font-weight: 900;
+  line-height: 1.35;
+  opacity: 0;
+  transform: translateY(-12px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.projectpulse-save-completed-banner-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+[data-theme="dark"] .projectpulse-save-completed-banner {
+  background: #14b8a6;
+  color: #042f2e;
+}
+/* 055D_4J_SAVE_COMPLETION_BANNER_END */
+
+/* 055D_4K_FINANCIAL_VISIBILITY_START */
+.work-register-financial-warning {
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+  color: #92400e;
+  border-radius: 12px;
+  padding: 0.75rem;
+  font-weight: 800;
+}
+/* 055D_4K_FINANCIAL_VISIBILITY_END */
+
+/* 055D_5A_BILLING_IDENTIFIER_FIELDS_START */
+.optional-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  font-size: 0.72rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+/* 055D_5A_BILLING_IDENTIFIER_FIELDS_END */
+
+/* 057A_WORK_REGISTER_PURCHASE_ORDER_UI */
+.work-register-po-section {
+  border: 1px solid rgba(0, 91, 153, 0.24);
+  border-radius: 16px;
+  padding: 16px;
+  background: rgba(233, 247, 255, 0.62);
+}
+
+.work-register-po-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.work-register-po-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.work-register-po-heading small,
+.work-register-po-heading span {
+  color: #536b8f;
+}
+
+.work-register-po-value {
+  font-weight: 700;
+  color: #005b99;
+}
+
+
+/* PR467 immutable work identifiers and creation receipt */
+.work-register-identifier-card { display: grid; gap: .2rem; margin: .75rem 0; padding: .8rem 1rem; border: 1px solid #a9c9dd; border-left: 5px solid #007fad; border-radius: .8rem; background: #eef8fc; }
+.work-register-identifier-card span, .work-register-creation-receipt span { color: #486581; font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.work-register-identifier-card strong, .work-register-creation-receipt strong { color: #082f55; font-size: 1.35rem; letter-spacing: .04em; }
+.work-register-creation-receipt { display: grid; gap: .65rem; margin: 1rem 0; padding: 1rem; border: 2px solid #58b68b; border-radius: .9rem; background: #eefbf5; }
+.work-register-creation-receipt > div { display: grid; gap: .2rem; }
+.work-register-creation-receipt nav { display: flex; flex-wrap: wrap; gap: .55rem; }
+
+/* PR467_VISIBLE_WORK_IDENTIFIER_STYLE */
+.work-register-row-identifier,
+.work-register-drawer-identifier {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin: .35rem 0;
+  padding: .38rem .5rem;
+  border: 1px solid rgba(14, 116, 144, .25);
+  border-radius: .65rem;
+  background: rgba(224, 242, 254, .7);
+}
+.work-register-row-identifier span,
+.work-register-drawer-identifier span {
+  color: #475569;
+  font-size: .7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.work-register-row-identifier strong,
+.work-register-drawer-identifier strong {
+  color: #075985;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .03em;
+}
+.work-register-row-identifier button,
+.work-register-drawer-identifier button {
+  border: 0;
+  border-radius: .45rem;
+  padding: .24rem .42rem;
+  color: #075985;
+  background: #fff;
+  cursor: pointer;
+  font-size: .7rem;
+  font-weight: 800;
+}
+.work-register-row-identifier-missing {
+  color: #92400e;
+}

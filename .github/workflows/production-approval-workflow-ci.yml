@@ -1,0 +1,124 @@
+name: Validate Production Approval and Module 001B Time Reallocation
+
+on:
+  push:
+    branches:
+      - 'feature/approval-workflow-production-grade-ptc-usability-*'
+      - 'fix/approval-workflow-intuitive-hardening-*'
+  pull_request:
+    paths:
+      - '.github/workflows/production-approval-workflow-ci.yml'
+      - 'src/backend/ProjectTime.Api/Modules/ProductionApprovalWorkModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/ProductionApprovalWorkCompatibility.cs'
+      - 'src/backend/ProjectTime.Api/Modules/ProductionApprovalWorkflowHardening.cs'
+      - 'src/backend/ProjectTime.Api/Modules/CombinedModulePublicReadiness.cs'
+      - 'src/backend/ProjectTime.Api/Modules/Module001BTimeReallocationModule.cs'
+      - 'src/backend/ProjectTime.Api/Modules/PtcTimeStewardRoleBoundary.cs'
+      - 'src/backend/ProjectTime.Api/Modules/ModuleAvailabilityModule.cs'
+      - 'src/frontend/project-time-web/scripts/validate-pending-time-workflow.mjs'
+      - 'src/frontend/project-time-web/scripts/validate-module-001-ptc-time-steward.mjs'
+      - 'src/frontend/project-time-web/src/ProductionApprovalWorkPortal.jsx'
+      - 'src/frontend/project-time-web/src/production-approval-work.css'
+      - 'src/frontend/project-time-web/src/production-approval-work-hardening.css'
+      - 'src/frontend/project-time-web/src/module001/PtcTimeStewardGate.jsx'
+      - 'src/frontend/project-time-web/src/module001/PtcTimesheetManagementPortal.jsx'
+      - 'src/frontend/project-time-web/src/module001b/Module001BTimeReallocationGate.jsx'
+      - 'src/frontend/project-time-web/src/module001b/Module001BTimeReallocationPortal.jsx'
+      - 'src/frontend/project-time-web/src/module001b/module001b-time-reallocation.css'
+      - 'src/frontend/project-time-web/src/main.jsx'
+      - 'src/frontend/project-time-web/src/module-availability-registry.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-approval-workflow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Verify isolated source scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main --no-tags
+          git diff --check origin/main...HEAD
+          git diff --name-only origin/main...HEAD
+          test ! -e .github/approval-production-payload/part-00.b64
+          test ! -e .github/approval-production-payload/part-02.b64
+
+      - name: Build API
+        run: dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release
+
+      - name: Install frontend dependencies
+        working-directory: src/frontend/project-time-web
+        run: npm ci --no-audit --no-fund
+
+      - name: Validate approval and Module 001B contracts
+        working-directory: src/frontend/project-time-web
+        run: |
+          node ./scripts/validate-pending-time-workflow.mjs
+          node ./scripts/validate-module-001-ptc-time-steward.mjs
+          node ./scripts/validate-module-001-ptc-timer-dom-ownership.mjs
+          node ./scripts/validate-runtime-role-policy-ptc-data.mjs
+          node ./scripts/validate-role-permission-timesheet-stabilization.mjs
+
+      - name: Build complete frontend
+        working-directory: src/frontend/project-time-web
+        run: npm run build
+
+      - name: Verify compiled production markers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat src/frontend/project-time-web/dist/assets/*.js > /tmp/production-approval.js
+          cat src/frontend/project-time-web/dist/assets/*.css > /tmp/production-approval.css
+          for marker in \
+            'Time approvals across all weeks' \
+            'This is the only approval surface' \
+            'Time Reallocation & Corrections' \
+            'Submitted and approved time stays in its current status' \
+            'No worker resubmission, Manager approval, or Project Manager approval is required' \
+            '/api/runtime/timesheet/steward/001b/reallocation/entries/' \
+            '/api/approval-work/v2/pending' \
+            '/api/approval-work/v2/bulk-complete'; do
+            grep -Fq "$marker" /tmp/production-approval.js
+          done
+          for marker in \
+            '.production-approval-center' \
+            '.production-approval-project-scope' \
+            '.production-approval-return-guidance' \
+            '.module001b-shell' \
+            '.module001b-section' \
+            '.module001b-choice'; do
+            grep -Fq "$marker" /tmp/production-approval.css
+          done
+          for retired in \
+            'Move Time wizard' \
+            'Open Module 001B' \
+            'module001b-reallocation-launcher'; do
+            if grep -Fq "$retired" /tmp/production-approval.js /tmp/production-approval.css; then
+              echo "Retired Module 001 allocation surface remains in the production bundle: $retired" >&2
+              exit 1
+            fi
+          done
+          echo 'PRODUCTION_APPROVAL_MODULE001B_COMPILED_MARKERS=PASS'

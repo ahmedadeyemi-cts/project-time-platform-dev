@@ -1,0 +1,274 @@
+name: Module Management Enterprise Owner Authority CI
+
+on:
+  push:
+    branches:
+      - 'fix/module-management-enterprise-owner-authority-*'
+  pull_request:
+    paths:
+      - '.github/workflows/module-management-owner-drawer-ci.yml'
+      - 'src/backend/ProjectTime.Api/Modules/ProjectPulseActualSessionAuthority.cs'
+      - 'src/backend/ProjectTime.Api/Modules/ModuleCatalogOwnershipModule.cs'
+      - 'src/frontend/project-time-web/src/ModuleManagementTableView.jsx'
+      - 'src/frontend/project-time-web/src/module-management-table.css'
+      - 'tests/validate-module-management-owner-drawer.mjs'
+      - 'database/migrations/091_module_management_owner_storage_repair.sql'
+      - 'database/rollback/091_module_management_owner_storage_repair_rollback.sql'
+      - 'database/migrations/100_module001b_catalog_ownership_reconciliation.sql'
+      - 'database/rollback/100_module001b_catalog_ownership_reconciliation_rollback.sql'
+      - 'scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh'
+      - 'tests/test-module-catalog-owner-repair-migration-093.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: module-management-enterprise-owner-authority-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate enterprise Module Management and owner authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard exact focused source boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main --no-tags
+          git diff --name-only origin/main...HEAD | LC_ALL=C sort -u > "$RUNNER_TEMP/module-management-actual.txt"
+
+          HEAD_BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          if [[ "$HEAD_BRANCH" == fix/enterprise-ux-consistency-20260928 ]]; then
+            python3 tests/enterprise-ux-release-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == feature/module025-service-scope-20260921 ]]; then
+            python3 tests/service-scope/release_scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-sow-private-generation-20260921 ]]; then
+            python3 tests/flowhive-sow-private-generation-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-sow-plan-depth-20260925 ]]; then
+            python3 tests/flowhive-sow-plan-depth-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-enterprise-usability-routing-20260926 ]]; then
+            python3 tests/flowhive-enterprise-usability-routing-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-source-grounded-failsafe-20260926 ]]; then
+            python3 tests/flowhive-whole-wbs-failsafe-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-whole-wbs-live-final-20260926 ]]; then
+            python3 tests/flowhive-whole-wbs-live-final-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-replace-untouched-legacy-ai-draft-20260926 ]]; then
+            python3 tests/flowhive-replace-untouched-legacy-ai-draft-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-reviewable-partial-wbs-20260926 ]]; then
+            python3 tests/flowhive-reviewable-partial-wbs-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-frontend-convergence-marker-20260926 ]]; then
+            python3 tests/flowhive-frontend-convergence-marker-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-protected-uat-idempotent-20260927 ]]; then
+            python3 tests/flowhive-protected-uat-idempotent-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/module064-authoritative-model-catalog-20260920 ]]; then
+            python3 tests/module064-authoritative-model-catalog-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/flowhive-migration-runner-20260920 ]]; then
+            python3 tests/flowhive-psa-migration-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == feature/flowhive-auto-first-draft-20260920 ]]; then
+            python3 tests/flowhive-psa-automatic-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == feature/flowhive-sequential-wbs-20260920 ]]; then
+            python3 tests/flowhive-psa-sequential-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == feature/flowhive-psa-team-workspace-20260919 ]]; then
+            python3 tests/flowhive-psa-workspace-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == fix/module064-optional-provider-controls ]]; then
+            python3 tests/module064-provider-controls-scope.py
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == 'feature/module025-project-name-20260917' ]]; then
+            node tests/module025-project-name-scope.mjs
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == 'fix/module025-catalog-consistency-20260917' ]]; then
+            node tests/module-catalog-scope.mjs
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == 'feature/deepseek-v4-dgx-primary-20260904' ]]; then
+            node tests/validate-deepseek-release-scope.mjs
+            exit 0
+          fi
+          if [[ "$HEAD_BRANCH" == 'fix/protected-uat-validation-defects-20260903' ]]; then
+            cat > "$RUNNER_TEMP/protected-uat-validation-defects.txt" <<'EOF'
+          .github/workflows/module-loading-assignment-propagation-ci.yml
+          .github/workflows/module-management-owner-drawer-ci.yml
+          .github/workflows/projectpulse-deploy-test.yml
+          .github/workflows/projectpulse-release-test-control-ci-reregistered.yml
+          .github/workflows/projectpulse-release-test-control-ci.yml
+          database/migrations/100_module001b_catalog_ownership_reconciliation.sql
+          database/rollback/100_module001b_catalog_ownership_reconciliation_rollback.sql
+          scripts/ci/validate-celar-ai-enterprise-source-boundary.sh
+          scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh
+          scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh
+          src/backend/ProjectTime.Api/Ai/CelarAiInternalDataService.cs
+          src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagService.cs
+          src/backend/ProjectTime.Api/Modules/Module025SowGsdDocumentExporter.cs
+          src/backend/ProjectTime.Api/Modules/Module025SowGsdModule.cs
+          src/backend/ProjectTime.Api/Modules/ModuleCatalogOwnershipModule.cs
+          src/backend/ProjectTime.Api/Modules/ProjectFlowHiveAiPlannerOrchestrationModule.cs
+          src/frontend/project-time-web/src/ProjectFlowHiveCenter.jsx
+          src/frontend/project-time-web/src/module025/SowGsdWorkspace.jsx
+          src/frontend/project-time-web/src/project-flowhive-center.css
+          tests/CelarAiInternalDataTests/Program.cs
+          tests/test-module-catalog-owner-repair-migration-093.sh
+          tests/validate-celar-ai-pr630-consolidated.mjs
+          tests/validate-flowhive-sow-evidence-autoadmission.mjs
+          tests/validate-module-management-owner-drawer.mjs
+          tests/validate-systemwide-image-build-controller.mjs
+          EOF
+            sed -i 's/^[[:space:]]*//' "$RUNNER_TEMP/protected-uat-validation-defects.txt"
+            LC_ALL=C sort -u "$RUNNER_TEMP/protected-uat-validation-defects.txt" \
+              -o "$RUNNER_TEMP/protected-uat-validation-defects.txt"
+            cmp -s "$RUNNER_TEMP/module-management-actual.txt" "$RUNNER_TEMP/protected-uat-validation-defects.txt" || {
+              echo 'Protected-UAT validation-defect repair differs from the exact governed Module Management source set.' >&2
+              diff -u "$RUNNER_TEMP/protected-uat-validation-defects.txt" "$RUNNER_TEMP/module-management-actual.txt" >&2 || true
+              exit 1
+            }
+            echo 'MODULE_MANAGEMENT_PROTECTED_UAT_VALIDATION_DEFECTS_SOURCE_BOUNDARY=PASS'
+            exit 0
+          fi
+
+          cat > "$RUNNER_TEMP/module-management-focused.txt" <<'EOF'
+          .github/workflows/module-management-owner-drawer-ci.yml
+          src/backend/ProjectTime.Api/Modules/ProjectPulseActualSessionAuthority.cs
+          src/frontend/project-time-web/src/ModuleManagementTableView.jsx
+          src/frontend/project-time-web/src/module-management-table.css
+          tests/validate-module-management-owner-drawer.mjs
+          EOF
+          sed -i 's/^[[:space:]]*//' "$RUNNER_TEMP/module-management-focused.txt"
+          LC_ALL=C sort -u "$RUNNER_TEMP/module-management-focused.txt" -o "$RUNNER_TEMP/module-management-focused.txt"
+
+          cat > "$RUNNER_TEMP/pr719-reviewed.txt" <<'EOF'
+          .github/workflows/module-loading-assignment-propagation-ci.yml
+          .github/workflows/module-management-owner-drawer-ci.yml
+          .github/workflows/projectpulse-release-test-control-ci.yml
+          .github/workflows/runtime-navigation-work-register-responsive-ci.yml
+          scripts/release-test/run-assigned-work-protected-test-uat.sh
+          src/backend/ProjectTime.Api/Modules/Module001AEngineerTaskCloseoutModule.cs
+          src/backend/ProjectTime.Api/Modules/ModuleCatalogOwnershipModule.cs
+          src/frontend/project-time-web/scripts/validate-module-loading-assignment-propagation.mjs
+          src/frontend/project-time-web/scripts/validate-modules-directory-page.mjs
+          src/frontend/project-time-web/src/EngineerTaskCloseoutCenter.jsx
+          src/frontend/project-time-web/src/ModuleManagementTableView.jsx
+          src/frontend/project-time-web/src/ModulesDirectoryPortal.jsx
+          src/frontend/project-time-web/src/background-request-role-gate.js
+          tests/validate-module-management-owner-drawer.mjs
+          EOF
+          sed -i 's/^[[:space:]]*//' "$RUNNER_TEMP/pr719-reviewed.txt"
+          LC_ALL=C sort -u "$RUNNER_TEMP/pr719-reviewed.txt" -o "$RUNNER_TEMP/pr719-reviewed.txt"
+
+          if cmp -s "$RUNNER_TEMP/module-management-actual.txt" "$RUNNER_TEMP/module-management-focused.txt"; then
+            echo 'MODULE_MANAGEMENT_FOCUSED_SOURCE_BOUNDARY=PASS'
+          elif cmp -s "$RUNNER_TEMP/module-management-actual.txt" "$RUNNER_TEMP/pr719-reviewed.txt"; then
+            echo 'PR719_MODULE_MANAGEMENT_COMBINED_SOURCE_BOUNDARY=PASS'
+          elif [[ "$HEAD_BRANCH" == 'control/pr1153-source-registration-20260923' ]]; then
+            python3 tests/laya/release-registration.py --control
+          elif [[ "$HEAD_BRANCH" == 'fix/automatic-document-admission-laya-20260923' ]]; then
+            python3 tests/laya/release-registration.py --application
+          else
+            echo 'Module Management repair changed an unexpected source path.' >&2
+            diff -u "$RUNNER_TEMP/module-management-focused.txt" "$RUNNER_TEMP/module-management-actual.txt" || true
+            exit 1
+          fi
+
+          if grep -Eq '^database/|^\.github/workflows/projectpulse-deploy-|production|secret|infrastructure' "$RUNNER_TEMP/module-management-actual.txt"; then
+            if [[ "$HEAD_BRANCH" == 'control/pr1153-source-registration-20260923' ]]; then
+              python3 tests/laya/release-registration.py --protected-list "$(grep -E '^database/|^\.github/workflows/projectpulse-deploy-|production|secret|infrastructure' "$RUNNER_TEMP/module-management-actual.txt")"
+            else
+              echo 'The focused UI and authority repair crossed a protected deployment, migration, secret, or infrastructure boundary.' >&2
+              exit 1
+            fi
+          fi
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/frontend/project-time-web/package-lock.json
+
+      - name: Validate focused enterprise source contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check tests/validate-module-management-owner-drawer.mjs
+          node tests/validate-module-management-owner-drawer.mjs
+          node src/frontend/project-time-web/scripts/validate-pr698-table-module-management.mjs
+          git diff --check
+
+      - name: Build ProjectTime API in Release mode
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          dotnet build \
+            src/backend/ProjectTime.Api/ProjectTime.Api.csproj \
+            --configuration Release \
+            --nologo
+
+      - name: Install and audit frontend dependencies
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --no-audit --no-fund
+          npm audit --audit-level=high
+
+      - name: Build complete frontend production bundle
+        working-directory: src/frontend/project-time-web
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run build
+
+      - name: Verify clean generated source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git diff --exit-code -- . ':!src/frontend/project-time-web/dist'
+          echo 'MODULE_MANAGEMENT_COMPLETE_BUILD=PASS'

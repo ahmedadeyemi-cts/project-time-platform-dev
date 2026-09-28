@@ -1,0 +1,102 @@
+name: Mirror to US Signal ProjectPulse
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "release/**"
+      - "v*"
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: projectpulse-corporate-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'ahmedadeyemi-cts/project-time-platform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out complete reviewed history
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Validate mirror credential
+        env:
+          MIRROR_TOKEN: ${{ secrets.PROJECTPULSE_MIRROR_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${MIRROR_TOKEN:-}" ]]; then
+            echo "PROJECTPULSE_MIRROR_TOKEN is not configured." >&2
+            exit 1
+          fi
+          echo "::add-mask::$MIRROR_TOKEN"
+          echo "MIRROR_CREDENTIAL_PRESENT=YES"
+
+      - name: Mirror only protected release refs
+        env:
+          MIRROR_TOKEN: ${{ secrets.PROJECTPULSE_MIRROR_TOKEN }}
+          DESTINATION_REPOSITORY: US-Signal-Technical-Operations-Center/ProjectPulse
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          set +x
+
+          SOURCE_REPOSITORY="ahmedadeyemi-cts/project-time-platform"
+          DESTINATION_URL="https://x-access-token:${MIRROR_TOKEN}@github.com/${DESTINATION_REPOSITORY}.git"
+
+          [[ "$GITHUB_REPOSITORY" == "$SOURCE_REPOSITORY" ]]
+          git remote add corporate "$DESTINATION_URL"
+          trap 'git remote set-url corporate "https://github.com/${DESTINATION_REPOSITORY}.git" 2>/dev/null || true' EXIT
+
+          SOURCE_MAIN="$(git rev-parse refs/remotes/origin/main 2>/dev/null || git rev-parse main)"
+          git fetch --no-tags corporate refs/heads/main:refs/remotes/corporate/main 2>/dev/null || true
+
+          if git show-ref --verify --quiet refs/remotes/corporate/main; then
+            DESTINATION_MAIN="$(git rev-parse refs/remotes/corporate/main)"
+            git merge-base --is-ancestor "$DESTINATION_MAIN" "$SOURCE_MAIN" || {
+              echo "Corporate main is not a fast-forward ancestor of source main." >&2
+              exit 1
+            }
+          fi
+
+          git push corporate "${SOURCE_MAIN}:refs/heads/main"
+
+          mapfile -t RELEASE_TAGS < <(
+            git for-each-ref --format='%(refname)' refs/tags/release/ refs/tags/v |
+              sort -u
+          )
+
+          for tag_ref in "${RELEASE_TAGS[@]}"; do
+            [[ "$tag_ref" == refs/tags/release/* || "$tag_ref" == refs/tags/v* ]]
+            git push corporate "$tag_ref:$tag_ref"
+          done
+
+          DESTINATION_MAIN="$(git ls-remote corporate refs/heads/main | awk '{print $1}')"
+          [[ "$DESTINATION_MAIN" == "$SOURCE_MAIN" ]]
+
+          for tag_ref in "${RELEASE_TAGS[@]}"; do
+            SOURCE_TAG="$(git rev-parse "$tag_ref^{commit}")"
+            DESTINATION_TAG="$(git ls-remote corporate "$tag_ref^{}" | awk '{print $1}')"
+            if [[ -z "$DESTINATION_TAG" ]]; then
+              DESTINATION_TAG="$(git ls-remote corporate "$tag_ref" | awk '{print $1}')"
+            fi
+            [[ "$DESTINATION_TAG" == "$SOURCE_TAG" ]]
+          done
+
+          echo "PROJECTPULSE_CORPORATE_MIRROR=COMPLETE"
+          echo "PROJECTPULSE_CORPORATE_MIRROR_SOURCE_MAIN=$SOURCE_MAIN"
+          echo "PROJECTPULSE_CORPORATE_MIRROR_TAG_COUNT=${#RELEASE_TAGS[@]}"

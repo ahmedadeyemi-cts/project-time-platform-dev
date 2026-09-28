@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+"""Offline regression tests: no cloud, application, or model requests."""
+from __future__ import annotations
+import copy
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import re
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from urllib.request import Request
+import zipfile
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("resolver", ROOT / "scripts/release-test/resolve-flowhive-installed-deployment.py")
+resolver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(resolver)
+REPO = "ahmedadeyemi-cts/project-time-platform"
+APP, CONTROLLER, VERIFIER = "a" * 40, "b" * 40, "c" * 40
+API = "registry.invalid/api@sha256:" + "d" * 64
+WEB = "registry.invalid/web@sha256:" + "e" * 64
+REAL_MAIN_PATH_SKIPPED_STEPS = (
+    "Admit the exact reviewed PSA candidate using trusted main controls",
+    "Verify existing PM and uploaded SOW before deployment",
+    "Install isolated live-browser acceptance dependencies",
+    "Guard exact source, manual Test scope, and no-migration boundary",
+    "Prove authenticated Oracle HTTPS services before Azure mutation",
+    "Snapshot the protected Test API",
+    "Preserve the currently deployed immutable API image",
+    "Configure the protected token and deploy the Test API revision",
+)
+
+
+def case(conclusion="failure"):
+    run = {"id": 1234, "workflow_id": resolver.WORKFLOW_ID,
+           "path": resolver.WORKFLOW_PATH, "event": "workflow_dispatch",
+           "head_branch": "main", "head_sha": CONTROLLER,
+           "repository": {"full_name": REPO}, "run_attempt": 1,
+           "status": "completed", "conclusion": conclusion, "updated_at": "2026-09-11T20:00:00Z"}
+    steps = [{"name": name, "number": index + 1, "status": "completed", "conclusion": "success"}
+             for index, name in enumerate(resolver.REQUIRED_STEPS)]
+    steps += [{"name": "Verify PSA candidate health and the live SOW-to-WBS lifecycle",
+               "number": len(steps) + 1, "status": "completed", "conclusion": conclusion}]
+    steps += [{"name": name, "number": len(steps) + index + 1,
+               "status": "completed", "conclusion": "skipped"} for index, name in enumerate(resolver.ROLLBACK_STEPS)]
+    jobs = [{"name": resolver.DEPLOY_JOB, "run_id": run["id"], "status": "completed", "conclusion": conclusion, "steps": steps}]
+    manifest = {"repository": REPO, "environment": "test", "sha": APP,
+                "branch": "release/flowhive-sow-successor-20260908", "pullRequest": 915,
+                "allowCustomerPublication": False, "allowCanonicalTaskAdoption": False,
+                "migrations": [{"file": "103_first.sql"}, {"file": "107_forward.sql"}]}
+    receipts = {
+        "deployment-identity.json": {"environment": "test", "productionMutation": False,
+            "applicationSha": APP, "applicationBranch": manifest["branch"],
+            "deploymentRunId": "1234", "deploymentAttempt": "1", "controllerSha": CONTROLLER,
+            "apiRevision": "api--rela-1234-1", "webRevision": "web--relw-1234-1", "apiImage": API, "webImage": WEB},
+        "immutable-images.json": {"apiImage": API, "webImage": WEB},
+        "flowhive-psa-migrations.json": {"status": "applied_and_verified", "environment": "test",
+            "productionMutation": False, "releaseCommit": APP, "controlCommit": CONTROLLER,
+            "migrations": ["103_first", "107_forward"]},
+        "deployment-health-verified.json": {"deploymentHealthVerified": True, "sourceCommit": APP, "productionMutation": False},
+    }
+    return run, jobs, manifest, receipts
+
+
+def pack(run, receipts):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for name, value in receipts.items():
+            bundle.writestr(name, json.dumps(value))
+    archive = buffer.getvalue()
+    artifact = {"id": 5678, "name": f"systemwide-enterprise-reliability-test-evidence-{run['id']}-{run['run_attempt']}",
+                "expired": False, "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
+                "workflow_run": {"id": run["id"], "head_branch": "main", "head_sha": run["head_sha"]}}
+    return artifact, archive
+
+
+def validate(data, artifact_mutation=None):
+    run, jobs, manifest, receipts = data
+    artifact, archive = pack(run, receipts)
+    if artifact_mutation:
+        artifact_mutation(artifact)
+    return resolver.resolve(run, jobs, artifact, archive, manifest, REPO, VERIFIER)
+
+
+def standard_main_case():
+    run, jobs, manifest, receipts = case()
+    identity = receipts["deployment-identity.json"]
+    identity["applicationBranch"] = "main"
+    identity["applicationSha"] = CONTROLLER
+    receipts["immutable-images.json"]["migrationImage"] = API.replace("/api@", "/migrations@")
+    receipts["migrations.json"] = {
+        "status": "applied_and_verified",
+        "environment": "test",
+        "productionMutation": False,
+        "image": receipts["immutable-images.json"]["migrationImage"],
+        "migrations": list(resolver.STANDARD_MAIN_MIGRATIONS),
+    }
+    receipts["release-boundary.json"] = {
+        "environment": "test", "applicationRelease": CONTROLLER, "productionMutation": False,
+    }
+    receipts["deployment-health-verified.json"]["sourceCommit"] = CONTROLLER
+    receipts.pop("flowhive-psa-migrations.json")
+    steps = jobs[0]["steps"]
+    for name in resolver.MAIN_PATH_SKIPPED_STEPS:
+        existing = next((step for step in steps if step["name"] == name), None)
+        if existing is None:
+            steps.append({"name": name, "number": len(steps) + 1, "status": "completed", "conclusion": "skipped"})
+        else:
+            existing["conclusion"] = "skipped"
+    return run, jobs, manifest, receipts
+
+
+class ResolutionTests(unittest.TestCase):
+    def test_current_controller_migration_step_is_supported(self):
+        # Read the real controller, independently of resolver fixture constants.
+        workflow = yaml.safe_load((ROOT / resolver.WORKFLOW_PATH).read_text())
+        deploy = next(job for job in workflow["jobs"].values() if job.get("name") == resolver.DEPLOY_JOB)
+        names = [step.get("name", "") for step in deploy["steps"]]
+        actual = [name for name in names if name.startswith("Apply and verify") and "inside Test private network" in name]
+        self.assertEqual(len(actual), 1)
+        self.assertIn(actual[0], resolver.MIGRATION_STEPS)
+        data = self.scoped_main_case()
+        next(step for step in data[1][0]["steps"] if step["name"] == resolver.LEGACY_MIGRATION_STEP)["name"] = actual[0]
+        migration_run = next(step["run"] for step in deploy["steps"] if step.get("name") == actual[0])
+        receipt_lists = re.findall(r'migrations:(\[[^\]]+\])', migration_run)
+        self.assertEqual(len(receipt_lists), 1)
+        data[3]["migrations.json"]["migrations"] = json.loads(receipt_lists[0])
+        self.assertIn("109_module025_project_name", data[3]["migrations.json"]["migrations"])
+        context = validate(data)
+        self.assertTrue(context["installationVerified"])
+        self.assertFalse(context["functionalAcceptanceVerified"])
+        self.assertTrue(context["liveIdentityRequired"])
+        self.assertFalse(context["businessWritesPermitted"])
+
+    def test_current_migration_step_requires_exact_current_receipt(self):
+        for migration_list in (list(resolver.STANDARD_MAIN_MIGRATIONS),
+                               [*resolver.STANDARD_MAIN_MIGRATIONS, "109_module025_project_name", "999_unreviewed"],
+                               ["109_module025_project_name"]):
+            with self.subTest(migrations=migration_list):
+                data = self.scoped_main_case()
+                next(step for step in data[1][0]["steps"] if step["name"] == resolver.LEGACY_MIGRATION_STEP)["name"] = resolver.CURRENT_MIGRATION_STEP
+                data[3]["migrations.json"]["migrations"] = migration_list
+                with self.assertRaisesRegex(resolver.ResolutionError, "deployment_migrations_not_verified"):
+                    validate(data)
+
+    def test_migration_aliases_require_exactly_one_successful_ordered_step(self):
+        for alias in resolver.MIGRATION_STEPS:
+            for mutation, diagnostic in (
+                ("missing", "migration_step_missing_or_ambiguous"),
+                ("both", "migration_step_missing_or_ambiguous"),
+                ("renamed", "migration_step_missing_or_ambiguous"),
+                ("failure", "installation_step_not_successful"),
+                ("skipped", "installation_step_not_successful"),
+                ("in_progress", "deployment_steps_not_complete"),
+                ("after_deploy", "installation_step_order_invalid"),
+            ):
+                with self.subTest(alias=alias, mutation=mutation):
+                    data = self.scoped_main_case()
+                    steps = data[1][0]["steps"]
+                    step = next(row for row in steps if row["name"] == resolver.LEGACY_MIGRATION_STEP)
+                    step["name"] = alias
+                    if mutation == "missing": steps.remove(step)
+                    elif mutation == "both":
+                        steps.append(dict(step, name=next(name for name in resolver.MIGRATION_STEPS if name != alias)))
+                    elif mutation == "renamed": step["name"] += " (unverified successor)"
+                    elif mutation in {"failure", "skipped"}: step["conclusion"] = mutation
+                    elif mutation == "in_progress": step["status"] = mutation
+                    else:
+                        steps.remove(step)
+                        steps.append(step)
+                    with self.assertRaisesRegex(resolver.ResolutionError, diagnostic):
+                        validate(data)
+
+    def test_main_path_skip_names_match_server_recorded_workflow(self):
+        self.assertEqual(resolver.MAIN_PATH_SKIPPED_STEPS, REAL_MAIN_PATH_SKIPPED_STEPS)
+
+    def test_failed_acceptance_keeps_installation_and_failure_separate(self):
+        context = validate(case())
+        self.assertEqual(context["controllerSha"], CONTROLLER)
+        self.assertEqual(context["verificationCodeSha"], VERIFIER)
+        self.assertEqual(context["deploymentConclusion"], "failure")
+        self.assertTrue(context["installationVerified"])
+        self.assertTrue(context["liveIdentityRequired"])
+        self.assertFalse(context["businessWritesPermitted"])
+        self.assertFalse(context["functionalAcceptanceVerified"])
+        self.assertEqual(len(context["failedAcceptanceSteps"]), 1)
+
+    def test_successful_deployment_remains_supported(self):
+        context = validate(case("success"))
+        self.assertEqual(context["deploymentConclusion"], "success")
+        self.assertEqual(context["failedAcceptanceSteps"], [])
+
+    def test_standard_main_release_accepts_installed_identity_without_candidate_lane(self):
+        context = validate(standard_main_case())
+        self.assertEqual(context["applicationBranch"], "main")
+        self.assertEqual(context["applicationSha"], CONTROLLER)
+        self.assertIsNone(context["applicationPullRequest"])
+        self.assertEqual(context["deploymentConclusion"], "failure")
+        self.assertEqual(context["failedAcceptanceSteps"], ["Verify PSA candidate health and the live SOW-to-WBS lifecycle"])
+
+    def scoped_main_case(self, conclusion="failure"):
+        data = standard_main_case()
+        data[0]["conclusion"] = conclusion
+        data[1][0]["conclusion"] = conclusion
+        steps = data[1][0]["steps"]
+        for step in steps:
+            if step["name"] == "Verify PSA candidate health and the live SOW-to-WBS lifecycle":
+                step["conclusion"] = "skipped"
+            if step["name"] == resolver.BROWSER_SETUP_STEP:
+                step["conclusion"] = "success"
+        steps.extend([
+            {"name": "Run protected-Test authenticated functional UAT", "status": "completed", "conclusion": "skipped"},
+            {"name": resolver.SCOPED_SOW_STEP, "status": "completed", "conclusion": conclusion},
+        ])
+        return data
+
+    def test_scoped_main_acceptance_failure_preserves_verified_installation(self):
+        context = validate(self.scoped_main_case())
+        self.assertTrue(context["installationVerified"])
+        self.assertFalse(context["businessWritesPermitted"])
+        self.assertEqual(context["failedAcceptanceSteps"], [resolver.SCOPED_SOW_STEP])
+        self.assertFalse(context["functionalAcceptanceVerified"])
+
+    def test_scoped_main_success_remains_verifiable(self):
+        context = validate(self.scoped_main_case("success"))
+        self.assertEqual(context["failedAcceptanceSteps"], [])
+        self.assertTrue(context["liveIdentityRequired"])
+
+    def test_scoped_main_requires_browser_setup_and_no_full_uat(self):
+        for name, value, diagnostic in [
+            (resolver.BROWSER_SETUP_STEP, "skipped", "main_path_step_not_skipped"),
+            ("Run protected-Test authenticated functional UAT", "success", "scoped_sow_full_acceptance_not_skipped"),
+        ]:
+            data = self.scoped_main_case()
+            next(step for step in data[1][0]["steps"] if step["name"] == name)["conclusion"] = value
+            with self.assertRaisesRegex(resolver.ResolutionError, diagnostic):
+                validate(data)
+
+    def test_scoped_main_still_rejects_failed_installation_and_rollback(self):
+        for name, value, diagnostic in [
+            ("Deploy immutable Test API image", "failure", "installation_step_not_successful"),
+            (resolver.ROLLBACK_STEPS[0], "success", "rollback_not_excluded"),
+        ]:
+            data = self.scoped_main_case()
+            next(step for step in data[1][0]["steps"] if step["name"] == name)["conclusion"] = value
+            with self.assertRaisesRegex(resolver.ResolutionError, diagnostic):
+                validate(data)
+
+    def test_standard_main_release_rejects_active_candidate_path_or_mismatched_identity(self):
+        data = standard_main_case()
+        next(step for step in data[1][0]["steps"] if step["name"] == resolver.MAIN_PATH_SKIPPED_STEPS[0])["conclusion"] = "success"
+        with self.assertRaisesRegex(resolver.ResolutionError, "main_path_step_not_skipped"):
+            validate(data)
+        data = standard_main_case()
+        data[3]["deployment-identity.json"]["applicationSha"] = APP
+        with self.assertRaisesRegex(resolver.ResolutionError, "main_release_identity_not_bound_to_controller"):
+            validate(data)
+
+    def test_each_installation_step_must_have_succeeded(self):
+        for name in resolver.REQUIRED_STEPS:
+            with self.subTest(name=name):
+                data = case()
+                next(s for s in data[1][0]["steps"] if s["name"] == name)["conclusion"] = "failure"
+                with self.assertRaisesRegex(resolver.ResolutionError, "installation_step_not_successful"):
+                    validate(data)
+
+    def test_rollback_cannot_be_present_even_when_images_were_installed(self):
+        for name in resolver.ROLLBACK_STEPS:
+            with self.subTest(name=name):
+                data = case()
+                next(s for s in data[1][0]["steps"] if s["name"] == name)["conclusion"] = "success"
+                with self.assertRaisesRegex(resolver.ResolutionError, "rollback_not_excluded"):
+                    validate(data)
+
+    def test_unknown_failure_is_not_waived(self):
+        data = case()
+        data[1][0]["steps"].append({"name": "Unknown cleanup", "status": "completed", "conclusion": "failure"})
+        with self.assertRaisesRegex(resolver.ResolutionError, "non_acceptance_failure_unresolved"):
+            validate(data)
+
+    def test_missing_or_duplicate_job_or_step_is_rejected(self):
+        for mutation in (lambda d: d[1].clear(), lambda d: d[1].append(copy.deepcopy(d[1][0])),
+                         lambda d: d[1][0]["steps"].append(copy.deepcopy(d[1][0]["steps"][0]))):
+            data = case()
+            mutation(data)
+            with self.assertRaises(resolver.ResolutionError):
+                validate(data)
+
+    def test_queued_cancelled_timed_out_runs_are_not_installations(self):
+        for status, conclusion in (("queued", None), ("in_progress", None), ("completed", "cancelled"), ("completed", "timed_out")):
+            with self.subTest(status=status, conclusion=conclusion):
+                data = case()
+                data[0].update(status=status, conclusion=conclusion)
+                with self.assertRaisesRegex(resolver.ResolutionError, "selected_run_not_terminal"):
+                    validate(data)
+
+    def test_other_workflow_repository_and_branch_are_rejected(self):
+        for mutation in (lambda d: d[0].update(workflow_id=1), lambda d: d[0].update(head_branch="other"),
+                         lambda d: d[0].update(event="pull_request"), lambda d: d[0].update(repository={"full_name": "other/repo"})):
+            data = case()
+            mutation(data)
+            with self.assertRaises(resolver.ResolutionError):
+                validate(data)
+
+    def test_wrong_attempt_artifact_is_rejected(self):
+        with self.assertRaisesRegex(resolver.ResolutionError, "artifact_attempt_mismatch"):
+            validate(case(), lambda a: a.update(name="systemwide-enterprise-reliability-test-evidence-1234-2"))
+
+    def test_unbound_or_expired_artifact_is_rejected(self):
+        for mutation in (lambda a: a.update(expired=True), lambda a: a["workflow_run"].update(id=4321),
+                         lambda a: a["workflow_run"].update(head_sha=VERIFIER)):
+            with self.assertRaises(resolver.ResolutionError):
+                validate(case(), mutation)
+
+    def test_artifact_digest_must_match_actual_download(self):
+        with self.assertRaisesRegex(resolver.ResolutionError, "artifact_digest_mismatch"):
+            validate(case(), lambda a: a.update(digest="sha256:" + "0" * 64))
+
+    def test_missing_or_duplicate_receipt_is_rejected(self):
+        data = case()
+        data[3].pop("deployment-identity.json")
+        with self.assertRaisesRegex(resolver.ResolutionError, "receipt_missing_or_ambiguous"):
+            validate(data)
+        data = case()
+        data[3]["other/deployment-identity.json"] = data[3]["deployment-identity.json"]
+        with self.assertRaisesRegex(resolver.ResolutionError, "receipt_missing_or_ambiguous"):
+            validate(data)
+
+    def test_recorded_controller_is_not_replaced_by_new_verifier(self):
+        data = case()
+        data[3]["deployment-identity.json"]["controllerSha"] = VERIFIER
+        with self.assertRaisesRegex(resolver.ResolutionError, "run_binding_invalid"):
+            validate(data)
+
+    def test_image_disagreement_or_mutable_tag_is_rejected(self):
+        for value in ("registry.invalid/api:latest", WEB):
+            data = case()
+            data[3]["deployment-identity.json"]["apiImage"] = value
+            with self.assertRaisesRegex(resolver.ResolutionError, "image_receipt_mismatch"):
+                validate(data)
+
+    def test_wrong_or_broadened_approval_is_rejected(self):
+        for mutation in (lambda m: m.update(sha=VERIFIER), lambda m: m.update(allowCustomerPublication=True),
+                         lambda m: m.update(allowCanonicalTaskAdoption=True), lambda m: m.update(environment="production")):
+            data = case()
+            mutation(data[2])
+            with self.assertRaises(resolver.ResolutionError):
+                validate(data)
+
+    def test_supported_successor_release_lane_is_bound_to_exact_candidate_sha(self):
+        data = case()
+        data[2]["branch"] = "fix/flowhive-planner-live-provider-output-20260913"
+        data[2]["pullRequest"] = 984
+        context = validate(data)
+        self.assertEqual(context["applicationSha"], APP)
+        self.assertEqual(context["applicationBranch"], "release/flowhive-sow-successor-20260908")
+
+    def test_unapproved_deployment_branch_is_rejected_even_for_candidate_sha(self):
+        data = case()
+        data[3]["deployment-identity.json"]["applicationBranch"] = "release/unapproved-lane"
+        with self.assertRaisesRegex(resolver.ResolutionError, "selected_deployment_not_current_approved_candidate"):
+            validate(data)
+
+    def test_missing_migration_or_migration_release_mismatch_is_rejected(self):
+        for mutation in (lambda r: r.update(status="started"), lambda r: r.update(releaseCommit=VERIFIER),
+                         lambda r: r.update(controlCommit=VERIFIER), lambda r: r.update(migrations=["103_first"]),
+                         lambda r: r.update(productionMutation=True)):
+            data = case()
+            mutation(data[3]["flowhive-psa-migrations.json"])
+            with self.assertRaisesRegex(resolver.ResolutionError, "migrations_not_verified"):
+                validate(data)
+
+    def test_health_receipt_does_not_replace_installation_proof(self):
+        data = case()
+        data[3]["deployment-health-verified.json"]["sourceCommit"] = VERIFIER
+        with self.assertRaisesRegex(resolver.ResolutionError, "health_not_verified"):
+            validate(data)
+
+    def test_same_image_fixture_cleanup_preserves_original_revision(self):
+        data = case()
+        data[1][0]["steps"].append({"name": "Run protected-Test assigned-work visibility UAT", "status": "completed", "conclusion": "success"})
+        data[3]["module001b-revision-reconcile.json"] = {
+            "phase": "converged", "expectedRevision": "api--m1bd-1234-1", "latestReadyRevision": "api--m1bd-1234-1",
+            "expectedRevisionActive": True, "trafficWeight": "100", "activeRevisions": ["api--m1bd-1234-1"],
+            "healthState": "Healthy", "productionMutation": False, "expectedImage": API, "observedImage": API}
+        context = validate(data)
+        self.assertEqual(context["initialApiRevision"], "api--rela-1234-1")
+        self.assertEqual(context["apiRevision"], "api--m1bd-1234-1")
+        data[3]["module001b-revision-reconcile.json"]["observedImage"] = WEB
+        with self.assertRaisesRegex(resolver.ResolutionError, "fixture_cleanup_not_reconciled"):
+            validate(data)
+
+    def test_cross_host_download_redirect_does_not_forward_github_token(self):
+        request = Request("https://api.github.com/repos/o/r/actions/artifacts/1/zip", headers={"Authorization": "Bearer " + "x" * 24})
+        redirected = resolver.SafeRedirect().redirect_request(request, None, 302, "Found", {}, "https://artifact.example.invalid/file")
+        self.assertIsNone(redirected.get_header("Authorization"))
+        with self.assertRaisesRegex(resolver.ResolutionError, "insecure_github_redirect"):
+            resolver.SafeRedirect().redirect_request(request, None, 302, "Found", {}, "http://artifact.example.invalid/file")
+
+    def test_inventory_reads_all_pages_and_rejects_inconsistent_total(self):
+        batches = [{"total_count": 101, "jobs": [{"id": i} for i in range(100)]}, {"total_count": 101, "jobs": [{"id": 100}]}]
+        with patch.object(resolver, "api_json", side_effect=batches) as api:
+            self.assertEqual(len(resolver.inventory("/repos/o/r/jobs", "jobs", "")), 101)
+            self.assertEqual(api.call_count, 2)
+        batches[1]["total_count"] = 102
+        with patch.object(resolver, "api_json", side_effect=batches), self.assertRaisesRegex(resolver.ResolutionError, "inventory_changed"):
+            resolver.inventory("/repos/o/r/jobs", "jobs", "")
+
+    def exercise_main(self, comparison="ahead", drift=False):
+        data = case()
+        run, jobs, manifest, receipts = data
+        artifact, archive = pack(run, receipts)
+        run_reads = 0
+        calls = []
+        def api(path, token):
+            nonlocal run_reads
+            calls.append(path)
+            if path.endswith("/actions/runs/1234"):
+                run_reads += 1
+                result = copy.deepcopy(run)
+                if drift and run_reads > 1:
+                    result["run_attempt"] = 2
+                return result
+            if "/compare/" in path:
+                return {"status": comparison, "merge_base_commit": {"sha": CONTROLLER}}
+            if "/attempts/1/jobs?" in path:
+                return {"total_count": 1, "jobs": jobs}
+            if "/artifacts?" in path:
+                return {"total_count": 1, "artifacts": [artifact]}
+            raise AssertionError("Unexpected mocked request: " + path)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".github").mkdir()
+            (root / ".github/flowhive-psa-protected-test-candidate.json").write_text(json.dumps(manifest))
+            output = root / "context.json"
+            output.write_text('{"old":true}')
+            env = {"OUTPUT_CONTEXT": str(output), "GH_TOKEN": "x" * 24, "GITHUB_REPOSITORY": REPO,
+                   "GITHUB_SHA": VERIFIER, "DEPLOYMENT_RUN_ID": "1234"}
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ, env, clear=True), patch.object(resolver, "api_json", side_effect=api), patch.object(resolver, "api_bytes", return_value=archive), patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+                    result = resolver.main()
+                contents = json.loads(output.read_text()) if output.exists() else None
+            finally:
+                os.chdir(previous)
+        return result, contents, calls
+
+    def test_real_entrypoint_accepts_newer_verifier_without_redeploy(self):
+        result, context, calls = self.exercise_main()
+        self.assertEqual(result, 0)
+        self.assertEqual(context["controllerSha"], CONTROLLER)
+        self.assertEqual(context["verificationCodeSha"], VERIFIER)
+        self.assertTrue(any("/attempts/1/jobs?" in path for path in calls))
+
+    def test_real_entrypoint_rejects_unrelated_controller_history(self):
+        result, context, _ = self.exercise_main(comparison="diverged")
+        self.assertEqual(result, 1)
+        self.assertIsNone(context)
+
+    def test_real_entrypoint_removes_stale_context_on_run_attempt_drift(self):
+        result, context, _ = self.exercise_main(drift=True)
+        self.assertEqual(result, 1)
+        self.assertIsNone(context)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

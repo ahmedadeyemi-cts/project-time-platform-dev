@@ -1,0 +1,877 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const workflowPath = '.github/workflows/projectpulse-deploy-test.yml';
+const retiredWorkflowPath = '.github/workflows/systemwide-enterprise-reliability-test-deployment.yml';
+const apiProjectPath = 'src/backend/ProjectTime.Api/ProjectTime.Api.csproj';
+const apiBuildPropsPath = 'src/backend/ProjectTime.Api/Directory.Build.props';
+const sourceRevisionPath = 'src/backend/ProjectTime.Api/.projectpulse-source-revision';
+const revisionWaitPath = 'scripts/wait-containerapp-ready-revision.sh';
+const assignedWorkUatPath = 'scripts/release-test/run-assigned-work-protected-test-uat.sh';
+const module025UatPath = 'scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh';
+const module025UatAccessPath = 'src/backend/ProjectTime.Api/Modules/Module025ProtectedTestUatAccess.cs';
+const module025ModulePath = 'src/backend/ProjectTime.Api/Modules/Module025SowGsdModule.cs';
+const apiProgramPath = 'src/backend/ProjectTime.Api/Program.cs';
+const module025WorkspacePath = 'src/frontend/project-time-web/src/module025/SowGsdWorkspace.jsx';
+const module025AuthoringWorkspacePath = 'src/frontend/project-time-web/src/module025/SowGsdAuthoringWorkspace.jsx';
+const celarContractsPath = 'src/backend/ProjectTime.Api/Ai/CelarAiEnterprisePlatformContracts.cs';
+const celarServicePath = 'src/backend/ProjectTime.Api/Ai/CelarAiEnterprisePlatformService.cs';
+const privateRagContractsPath = 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagContracts.cs';
+const privateRagServicePath = 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagService.cs';
+const privateRagRepositoryPath = 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagRepository.cs';
+const privateModelClientPath = 'src/backend/ProjectTime.Api/Ai/PulseAiPrivateModelClient.cs';
+const aiServicesPath = 'src/backend/ProjectTime.Api/Ai/ProjectPulseAiServiceCollectionExtensions.cs';
+const oracleRuntimeTestsPath = 'tests/CelarAiOracleExternalRuntimeTests/Program.cs';
+const webProxyPath = 'deployment/containers/web/default.conf.template';
+const module033WorkflowPath = '.github/workflows/module033-project-forge-ci.yml';
+const deepIntelligenceWorkflowPath = '.github/workflows/deep-intelligence-read-contract-ci.yml';
+const celarSourceBoundaryPath = 'scripts/ci/validate-celar-ai-enterprise-source-boundary.sh';
+const releaseControllerValidatorPath = '.github/workflows/projectpulse-release-test-control-ci.yml';
+const releaseControllerReregisteredValidatorPath = '.github/workflows/projectpulse-release-test-control-ci-reregistered.yml';
+const celarPr630ValidatorPath = 'tests/validate-celar-ai-pr630-consolidated.mjs';
+const module001bFixturePath = 'src/backend/ProjectTime.Api/Modules/Module001BProtectedTestUatFixtureModule.cs';
+const documentAuthorityMigrationBuilderPath = 'scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh';
+const module001bCatalogMigrationPath = 'database/migrations/100_module001b_catalog_ownership_reconciliation.sql';
+const module001bCatalogRollbackPath = 'database/rollback/100_module001b_catalog_ownership_reconciliation_rollback.sql';
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+const apiProject = fs.readFileSync(apiProjectPath, 'utf8');
+const apiBuildProps = fs.readFileSync(apiBuildPropsPath, 'utf8');
+const revisionWait = fs.readFileSync(revisionWaitPath, 'utf8');
+const assignedWorkUat = fs.readFileSync(assignedWorkUatPath, 'utf8');
+const module025Uat = fs.readFileSync(module025UatPath, 'utf8');
+const module025UatAccess = fs.readFileSync(module025UatAccessPath, 'utf8');
+const module025Module = fs.readFileSync(module025ModulePath, 'utf8');
+const apiProgram = fs.readFileSync(apiProgramPath, 'utf8');
+const module025Workspace = [
+  fs.readFileSync(module025WorkspacePath, 'utf8'),
+  fs.readFileSync(module025AuthoringWorkspacePath, 'utf8')
+].join('\n');
+const module025GenerationMonitor = fs.readFileSync('src/frontend/project-time-web/src/module025/useGenerationMonitor.js', 'utf8');
+const celarContracts = fs.readFileSync(celarContractsPath, 'utf8');
+const celarService = fs.readFileSync(celarServicePath, 'utf8');
+const privateRagContracts = fs.readFileSync(privateRagContractsPath, 'utf8');
+const privateRagService = fs.readFileSync(privateRagServicePath, 'utf8');
+const privateRagRepository = fs.readFileSync(privateRagRepositoryPath, 'utf8');
+const privateModelClient = fs.readFileSync(privateModelClientPath, 'utf8');
+const aiServices = fs.readFileSync(aiServicesPath, 'utf8');
+const oracleRuntimeTests = fs.readFileSync(oracleRuntimeTestsPath, 'utf8');
+const webProxy = fs.readFileSync(webProxyPath, 'utf8');
+const module033Workflow = fs.readFileSync(module033WorkflowPath, 'utf8');
+const deepIntelligenceWorkflow = fs.readFileSync(deepIntelligenceWorkflowPath, 'utf8');
+const celarSourceBoundary = fs.readFileSync(celarSourceBoundaryPath, 'utf8');
+const releaseControllerValidator = fs.readFileSync(releaseControllerValidatorPath, 'utf8');
+const releaseControllerReregisteredValidator = fs.readFileSync(releaseControllerReregisteredValidatorPath, 'utf8');
+const celarPr630Validator = fs.readFileSync(celarPr630ValidatorPath, 'utf8');
+const module001bFixture = fs.readFileSync(module001bFixturePath, 'utf8');
+const documentAuthorityMigrationBuilder = fs.readFileSync(documentAuthorityMigrationBuilderPath, 'utf8');
+const module001bCatalogMigration = fs.readFileSync(module001bCatalogMigrationPath, 'utf8');
+const module001bCatalogRollback = fs.readFileSync(module001bCatalogRollbackPath, 'utf8');
+
+assert.equal(
+  fs.existsSync(retiredWorkflowPath),
+  false,
+  'the unregistered duplicate protected-Test deployment workflow must remain retired'
+);
+assert.doesNotMatch(workflow, /\bfull_imae\b/);
+assert.doesNotMatch(
+  workflow,
+  /local\s+repository="\$1"[^\n]*\bimage="\$repository:/,
+  'image must not reference repository in the same local declaration under set -u'
+);
+assert.match(
+  workflow,
+  /local repository="\$1" dockerfile="\$2" context="\$3"\s*\n\s*local image="\$\{repository\}:\$\{UNIQUE_TAG\}"/
+);
+assert.match(workflow, /group: projectpulse-deploy-test/);
+assert.match(workflow, /queue: max/);
+assert.match(workflow, /cancel-in-progress: false/);
+assert.match(workflow, /dockerfile_for_acr="\$\{dockerfile_abs#"\$context_abs"\/\}"/);
+assert.match(workflow, /--file "\$dockerfile_for_acr"/);
+assert.match(workflow, /docker build --file "\$dockerfile_abs" --tag "\$full_image" "\$context_abs"/);
+assert.match(workflow, /docker push "\$full_image"/);
+assert.match(workflow, /BUILD_LOG="\$EVIDENCE_DIR\/image-build\.log"/);
+assert.match(workflow, /node tests\/validate-systemwide-image-build-controller\.mjs/);
+assert.match(workflow, /run-utilization-role-scoping-protected-test-uat\.sh/);
+assert.match(workflow, /Run protected-Test Module 025 SOW\/GSD generation lifecycle UAT/);
+assert.match(workflow, /Enable exact-run Module 025 protected-Test authorization fixture/);
+assert.match(workflow, /Disable exact-run Module 025 protected-Test authorization fixture/);
+assert.doesNotMatch(workflow, /TEST_APPLICATION_GATEWAY_/);
+assert.doesNotMatch(workflow, /az network application-gateway/);
+assert.match(workflow, /productionMutation:false/);
+assert.match(workflow, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED=true/);
+assert.match(workflow, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED=false/);
+assert.match(workflow, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_RUN_ID="\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/);
+assert.match(workflow, /persistentRoleAssignmentMutation:false/);
+assert.match(workflow, /run-module025-sow-gsd-protected-test-uat\.sh/);
+assert.match(workflow, /module025-sow-gsd-protected-test-uat\.json/);
+assert.match(module025Uat, /https:\/\/phd-west-test\.onenecklab\.com/);
+assert.match(module025Uat, /\.access\.isSolutionArchitect == true/);
+assert.match(module025Uat, /module025_detailed_scope_generation_queued/);
+assert.match(module025Uat, /module025_detailed_scope_generated/);
+assert.match(module025Uat, /\/generations\/\$GENERATION_ID/);
+assert.match(module025Uat, /\.terminal == true/);
+assert.match(module025Uat, /\["plan","design","implement","validate","release"\]/);
+assert.match(module025Uat, /\.engagement\.status == "review_ready"/);
+assert.match(
+  module025Uat,
+  /\.engagement\.aiMetadata\.CorrelationId \/\/ \.engagement\.aiMetadata\.correlationId/,
+  'Module 025 UAT must accept the persisted metadata dictionary casing while retaining camel-case compatibility'
+);
+assert.match(module025Uat, /module025_archived/);
+assert.match(module025Uat, /productionMutation:false/);
+assert.match(module025Uat, /demo\.manager@ussignal\.local/);
+assert.match(module025Uat, /X-ProjectPulse-Module025-Uat-Run/);
+assert.match(module025Uat, /protectedTestUatRoleFixture == true/);
+assert.match(module025Uat, /module025-generate-response-headers\.txt/);
+assert.match(module025Uat, /wait_for_fixture_public_revision/);
+assert.match(module025Uat, /module025-fixture-public-revision-ready\.json/);
+assert.match(module025Uat, /consecutive_healthy >= 3/);
+assert.match(module025Uat, /auth_get_with_transient_retry/);
+assert.match(module025Uat, /000\|502\|503\|504/);
+assert.match(module025Uat, /generationQueueElapsedSeconds/);
+assert.match(module025Uat, /generationTotalElapsedSeconds/);
+assert.match(module025Uat, /generationPollAttempts/);
+assert.match(module025Uat, /generationResponseServer/);
+// Execute the exact release gate against the API wire contract. Route changes
+// must not turn a validated external SOW into a false failure, or let a local
+// template, partial document, or failed provider masquerade as generation.
+const terminalGate = module025Uat.split('# BEGIN MODULE025_TERMINAL_CONTRACT\n')[1]
+  ?.split('# END MODULE025_TERMINAL_CONTRACT')[0];
+assert.ok(terminalGate, 'The executable terminal gate must be present');
+const generationId = '11111111-1111-4111-8111-111111111111';
+const phaseNames = ['Plan', 'Design', 'Implement', 'Validate', 'Release'];
+const decision = target => ({Target:target, Outcome:'used', ReasonCode:'generation_succeeded'});
+const terminalResponse = provider => ({
+  status:'module025_detailed_scope_generated', generationId, terminal:true,
+  stateChanged:true, revision:2, correlationId:'synthetic-correlation',
+  targetDecisions:[decision(provider)], completedPhases:phaseNames,
+  progress:phaseNames.map(phase => ({stage:'phase_completed', phase, provider})),
+  message:'PRIVATE_RESPONSE_MUST_NOT_APPEAR_IN_DIAGNOSTICS'
+});
+const terminalDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'module025-terminal-'));
+let terminalScenarios = 0;
+try {
+  function verifyTerminal(response, expectedPass, expectedCheck) {
+    const responsePath = path.join(terminalDirectory, 'response.json');
+    fs.writeFileSync(responsePath, typeof response === 'string' ? response : JSON.stringify(response));
+    const result = spawnSync('bash', ['-c', 'set -Eeuo pipefail\nfail() { echo "ERROR: $*" >&2; exit 1; }\n' + terminalGate], {
+      encoding:'utf8', timeout:5000,
+      env:{PATH:process.env.PATH, GENERATION_ID:generationId,
+        GENERATION_RESPONSE:responsePath, EVIDENCE_DIR:terminalDirectory}
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status === 0, expectedPass, result.stderr);
+    assert.doesNotMatch(result.stderr + result.stdout, /PRIVATE_RESPONSE_MUST_NOT_APPEAR/);
+    if (typeof response !== 'string') {
+      const report = JSON.parse(fs.readFileSync(path.join(terminalDirectory, 'module025-generation-contract.json')));
+      assert.equal(report.passed, expectedPass);
+      if (expectedCheck) assert.ok(report.failedChecks.includes(expectedCheck), JSON.stringify(report));
+      if (expectedPass) assert.deepEqual(report.providers,
+        [...new Set(response.targetDecisions.filter(d => d.Outcome === 'used').map(d => d.Target))].sort());
+    }
+    terminalScenarios++;
+  }
+  for (const provider of ['deepseek_v4', 'celar_ai', 'claude', 'openai'])
+    verifyTerminal(terminalResponse(provider), true);
+  const mixed = terminalResponse('openai');
+  mixed.targetDecisions.unshift({Target:'claude', Outcome:'failed', ReasonCode:'module025_external_phase_contract_invalid'});
+  mixed.targetDecisions.push(decision('celar_ai'));
+  mixed.progress[0] = {stage:'phase_resumed', phase:'Plan', provider:'celar_ai'};
+  verifyTerminal(mixed, true);
+  for (const [check, mutate] of [
+    ['terminal_status', r => {r.status = 'module025_ai_temporarily_unavailable';}],
+    ['generation_identity', r => {r.generationId = 'different-generation';}],
+    ['terminal', r => {r.terminal = false;}],
+    ['state_changed', r => {r.stateChanged = false;}],
+    ['revision', r => {r.revision = 1;}],
+    ['correlation', r => {r.correlationId = '';}],
+    ['provider_use', r => {r.targetDecisions = [];}],
+    ['provider_use', r => {r.targetDecisions[0].Outcome = 'failed';}],
+    ['provider_use', r => {r.targetDecisions[0].ReasonCode = 'local_fallback';}],
+    ['provider_use', r => {r.targetDecisions.push(decision('local'));}],
+    ['provider_use', r => {r.targetDecisions.push(decision('unknown'));}],
+    ['completed_phases', r => {r.completedPhases = phaseNames.slice(0, 4);}],
+    ['completed_phases', r => {r.completedPhases = [...phaseNames, 'Plan'];}],
+    ['durable_phases', r => {r.progress.pop();}],
+    ['durable_phases', r => {r.progress[4].stage = 'phase_failed';}],
+    ['durable_phases', r => {r.progress[4].phase = 'Plan';}],
+    ['phase_providers', r => {r.progress[0].provider = 'local';}],
+    ['phase_providers', r => {r.progress[0].provider = 'claude';}]
+  ]) {
+    const response = terminalResponse('openai');
+    mutate(response);
+    verifyTerminal(response, false, check);
+  }
+  verifyTerminal('{malformed', false);
+} finally {
+  fs.rmSync(terminalDirectory, {recursive:true, force:true});
+}
+assert.match(module025Uat, /draftProvider:\(\$draftProviders \| first\)/);
+assert.match(module025Uat, /draftProviders:\$draftProviders/);
+console.log(`MODULE025_TERMINAL_CONTRACT=PASS scenarios=${terminalScenarios}`);
+// Exercise the exact persisted-phase gate, including the live failure shape:
+// a substantive validation objective with CUCM named in its technical tasks.
+const readbackGate = module025Uat.split('# BEGIN MODULE025_READBACK_CONTRACT\n')[1]
+  ?.split('# END MODULE025_READBACK_CONTRACT')[0];
+assert.ok(readbackGate, 'The executable readback gate must be present');
+const readbackDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'module025-readback-'));
+const readback = () => ({
+  status:'module025_engagement_loaded', stateChanged:false,
+  engagement:{engagementId:generationId, ownerUserId:generationId, status:'review_ready',
+    isActive:true, revision:2, lastGeneratedAt:'2026-09-28T00:00:00Z',
+    sowSections:{reviewRequired:true, contractuallyBinding:false},
+    aiMetadata:{CorrelationId:'synthetic-correlation'},
+    phases:phaseNames.map((name, i) => ({phaseCode:name.toLowerCase(), sortOrder:i + 1,
+      objective:'Verify cluster health, database replication and core services after the upgrade; record functional call testing results and review operational readiness with customer stakeholders.',
+      detailedActivities:['Cluster health and replication verification', 'Operational readiness review'],
+      technicalTasks:['Verify Cisco Unified Communications Manager services across publisher and subscriber nodes.',
+        'Query replication health across the cluster.', 'Record call testing results.', 'Review post-upgrade backup readiness.'],
+      deliverables:['Health report', 'Acceptance record'], customerResponsibilities:['Review evidence'],
+      usSignalResponsibilities:['Execute verification'], prerequisites:['Upgrade completed'],
+      acceptanceCriteria:['Tests passed'], validationSteps:['Review logs'], risks:['Service disruption'],
+      aiGenerated:true, suggestedHours:24, finalHours:24
+    }))}
+});
+let readbackScenarios = 0;
+try {
+  function verifyReadback(response, expectedPass) {
+    const responsePath = path.join(readbackDirectory, 'readback.json');
+    fs.writeFileSync(responsePath, JSON.stringify(response));
+    const result = spawnSync('bash', ['-c', 'set -Eeuo pipefail\nfail() { echo "ERROR: $*" >&2; exit 1; }\n' + readbackGate], {
+      encoding:'utf8', timeout:5000,
+      env:{PATH:process.env.PATH, ENGAGEMENT_ID:generationId, SA_USER_ID:generationId,
+        GENERATED_REVISION:'2', READBACK_RESPONSE:responsePath}
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status === 0, expectedPass, result.stderr);
+    readbackScenarios++;
+  }
+  verifyReadback(readback(), true);
+  for (const mutate of [
+    r => {r.engagement.phases[3].technicalTasks[0] = 'Conduct user acceptance testing';},
+    r => {r.engagement.phases[3].objective = 'Validate CUCM';},
+    r => {r.engagement.phases[3].technicalTasks.pop();},
+    r => {r.engagement.phases[3].detailedActivities.pop();},
+    r => {r.engagement.phases[3].deliverables.pop();},
+    r => {r.engagement.phases[3].acceptanceCriteria = [];},
+    r => {r.engagement.phases[3].suggestedHours = 0;},
+    r => {r.engagement.phases[3].aiGenerated = false;},
+    r => {r.engagement.phases[3].objective += ' cited scope';},
+    r => {r.engagement.phases[3].objective += ' source-backed scope';},
+    r => {r.engagement.phases.pop();},
+    r => {r.engagement.revision = 1;},
+    r => {r.engagement.ownerUserId = 'different-owner';},
+    r => {r.engagement.status = 'draft';},
+    r => {r.engagement.sowSections.reviewRequired = false;}
+  ]) {
+    const response = readback(); mutate(response); verifyReadback(response, false);
+  }
+} finally { fs.rmSync(readbackDirectory, {recursive:true, force:true}); }
+console.log(`MODULE025_READBACK_CONTRACT=PASS scenarios=${readbackScenarios}`);
+assert.match(module025Uat, /seq 1 780/);
+assert.match(module025Uat, /terminal state within 42 minutes/);
+assert.match(module025Uat, /Cisco Unified Communications Manager \(Cisco CallManager \/ CUCM\) from version 14\.0 to version 15\.0/);
+assert.match(module025Uat, /\.insideSalesRepresentatives \| type == "array" and length > 0/);
+assert.match(module025Uat, /\.resalePeople == \.insideSalesRepresentatives/);
+assert.match(module025Uat, /mike beck/);
+assert.match(module025Uat, /jessica shaffer/);
+assert.match(
+  module025Uat,
+  /\. as \$bootstrap[\s\S]*?all\(\$bootstrap\.accountExecutives\[\]\?;[\s\S]*?all\(\$bootstrap\.insideSalesRepresentatives\[\]\?;/,
+  'Module 025 role-directory separation must use valid jq all(generator; condition) binding syntax'
+);
+assert.doesNotMatch(
+  module025Uat,
+  /all\(\.accountExecutives\[\]\? as \$accountExecutive;/,
+  'Module 025 UAT must not reintroduce the invalid jq generator-as-variable form'
+);
+assert.match(module025Uat, /\.detailedActivities \| type == "array" and length >= 2/);
+assert.match(module025Uat, /\.technicalTasks \| type == "array" and length >= 4/);
+assert.match(module025Uat, /minimumDetailedWorkPackages:10/);
+assert.match(module025Uat, /genericCitedScopeBoilerplateRejected:true/);
+assert.match(module025UatAccess, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED/);
+assert.match(module025UatAccess, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_RUN_ID/);
+assert.match(module025UatAccess, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_SOURCE_COMMIT/);
+assert.match(module025UatAccess, /PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_EXPIRES_AT/);
+assert.match(module025UatAccess, /expiresAt <= now/);
+assert.match(module025UatAccess, /expiresAt > now \+ 3_600/);
+assert.match(module025UatAccess, /phd-west-test\.onenecklab\.com/);
+assert.match(module025UatAccess, /actualUserId == effectiveUserId/);
+assert.match(module025UatAccess, /!ProjectPulseActualSessionAuthority\.IsViewAs\(context\)/);
+assert.match(module025UatAccess, /roles\.Contains\("MANAGER"\)/);
+assert.match(module025UatAccess, /!roles\.Overlaps/);
+assert.doesNotMatch(module025UatAccess, /INSERT|UPDATE|DELETE|app_user_role_assignments/i);
+assert.match(
+  celarContracts,
+  /internal sealed record CelarAiAuthoritativeScopeEvidence/,
+  'Module 025 saved-scope evidence must remain server-internal and unavailable to public request binding'
+);
+assert.match(module025Module, /ComposeModule025SowAsync\(/);
+assert.match(module025Module, /new CelarAiAuthoritativeScopeEvidence\(/);
+assert.match(module025Module, /generations\/\{generationId:guid\}/);
+assert.match(module025Module, /ai_generation_queued/);
+assert.match(module025Module, /ai_generation_started/);
+assert.match(module025Module, /ai_generation_completed/);
+assert.match(module025Module, /ProcessNextQueuedGenerationAsync/);
+assert.match(module025Module, /pg_try_advisory_lock\(hashtextextended\(@generation_id::text,725\)\)/);
+assert.match(module025Module, /WorkerLockConnectionString/);
+assert.match(module025Module, /KeepAlive = 30/);
+assert.match(module025Module, /RecordGenerationStartedAsync\(connectionString/);
+assert.match(module025Module, /RecordGenerationTerminalAsync\(\s*connectionString/);
+assert.doesNotMatch(module025Module, /IValueHttpResult|IStatusCodeHttpResult/);
+assert.match(apiProgram, /AddHostedService<Module025SowGsdGenerationWorker>\(\)/);
+assert.match(module025Workspace, /import useGenerationMonitor from '\.\/useGenerationMonitor\.js'/);
+assert.match(module025Workspace, /const generationMonitor = useGenerationMonitor\(\{/);
+assert.match(module025Workspace, /generationMonitor\.track\(payload\)/, 'the explicit Generate action must attach the queued job to monitoring');
+assert.match(module025GenerationMonitor, /callbacks\.current\.request\(`\/api\/module025\/sow-gsd\/\$\{engagementId\}\/generations\/latest`, \{ signal: controller\.signal \}\)/, 'opening a record must discover its durable job through an abortable read');
+assert.match(module025GenerationMonitor, /callbacks\.current\.request\(`\/api\/module025\/sow-gsd\/\$\{engagementId\}\/generations\/\$\{generationId\}`, \{ signal: controller\.signal \}\)/, 'polling must identify both the engagement and generation');
+assert.match(module025GenerationMonitor, /if \(payload\?\.terminal === true\) \{\s*callbacks\.current\.onComplete\?\.\(payload, engagementId\);\s*return;/, 'terminal jobs must notify the workspace and stop polling');
+assert.match(module025GenerationMonitor, /token === epoch\.current && !controller\.signal\.aborted/, 'late responses must remain isolated to the current monitor');
+assert.match(module025GenerationMonitor, /return \(\) => \{ controller\.abort\(\); window\.clearTimeout\(timer\); \}/, 'leaving a record must cancel its requests and polling timer');
+assert.doesNotMatch(module025GenerationMonitor, /method\s*:\s*['"](?:POST|PUT|PATCH|DELETE)['"]/i, 'discovery and monitoring must not start AI generation or mutate documents');
+assert.match(celarService, /authoritativeScopeEvidence: null/);
+assert.match(celarService, /internal Task<CelarAiComposeResult> ComposeModule025SowAsync/);
+assert.match(celarService, /GenerateModule025SowPlanAsync\(/);
+assert.match(privateRagContracts, /string SourceType = "project_document"/);
+assert.match(privateRagContracts, /string SourceModule = "011"/);
+assert.match(privateRagService, /CreateModule025AuthoritativeScopeSource/);
+assert.match(privateRagService, /SourceType: "module025_saved_service_overview"/);
+assert.match(privateRagService, /SourceModule: "025"/);
+assert.match(privateRagService, /RetrievalMode: "direct_knowledge"/);
+assert.match(privateRagService, /hasModule025AuthoritativeScope: authoritativeSource is not null/);
+assert.match(
+  privateRagService,
+  /AllowsDeterministicCitedPlanningFallback[\s\S]*?ProjectFlowHivePlan[\s\S]*?ProjectForgePlanEstimate;/,
+  'only FlowHive and Project Forge may use deterministic cited planning fallback'
+);
+assert.doesNotMatch(
+  privateRagService.match(/private static bool AllowsDeterministicCitedPlanningFallback[\s\S]*?;/)?.[0] ?? '',
+  /SowGsdPlanning/,
+  'Module 025 SOW generation must fail closed when the approved private model does not complete'
+);
+assert.match(privateRagService, /Module025SowMaximumOutputTokens = 12_000/);
+assert.match(privateRagService, /Module025SowMaximumAnswerCharacters = Module025GenerationEngine\.MaximumDocumentCharacters/);
+const module025Engine = fs.readFileSync('src/backend/ProjectTime.Api/Ai/Module025GenerationEngine.cs', 'utf8');
+assert.match(module025Engine, /MaximumPhaseCharacters = 96_000/);
+assert.match(module025Engine, /MaximumDocumentCharacters = 512_000/);
+assert.match(privateRagService, /FlowHivePlanMaximumOutputTokens = 12_000/);
+assert.match(privateRagService, /FlowHivePlanMaximumAnswerCharacters = 96_000/);
+assert.match(
+  privateRagService,
+  /MaximumOutputTokensForPlanning\([\s\S]*?SowGsdPlanning => Math\.Max\(configuredMaximum, Module025SowMaximumOutputTokens\)[\s\S]*?ProjectFlowHivePlan => Math\.Max\(configuredMaximum, FlowHivePlanMaximumOutputTokens\)/
+);
+assert.match(
+  privateRagService,
+  /MaximumAnswerCharactersForPlanning\([\s\S]*?SowGsdPlanning => Math\.Max\(configuredMaximum, Module025SowMaximumAnswerCharacters\)[\s\S]*?ProjectFlowHivePlan => Math\.Max\(configuredMaximum, FlowHivePlanMaximumAnswerCharacters\)/
+);
+assert.match(privateRagService, /ParseModule025DetailedPlan/);
+assert.match(privateRagService, /validateModule025DetailedPlan: authoritativeSource is not null/);
+assert.match(privateRagService, /normally 10 to 20 tasks, with multiple tasks per phase where the work requires them/);
+assert.match(privateRagService, /at least two tasks for every phase and at least ten tasks total/);
+assert.match(privateRagService, /exactly two detailed tasks for this phase/);
+assert.match(privateRagService, /Return exactly two distinct detailed tasks for the requested phase only/);
+assert.match(privateRagService, /Return exactly two complete technology-specific work packages/);
+assert.match(privateRagService, /at least two work packages in the \{phase\} phase/);
+assert.match(privateRagService, /at least four distinct execution steps in the \{phase\} phase/);
+assert.match(privateRagService, /at least two distinct deliverables in the \{phase\} phase/);
+assert.match(privateRagService, /task\.Description\.Length < 80/);
+assert.match(privateRagService, /\(task\.DetailedSteps\?\.Count \?\? 0\) < 2/);
+assert.match(privateRagService, /\(task\.AcceptanceCriteria\?\.Count \?\? 0\) == 0/);
+assert.match(privateRagService, /\(task\.ValidationSteps\?\.Count \?\? 0\) == 0/);
+assert.match(privateRagService, /\(task\.CustomerResponsibilities\?\.Count \?\? 0\) == 0/);
+assert.match(privateRagService, /\(task\.UsSignalResponsibilities\?\.Count \?\? 0\) == 0/);
+assert.match(privateRagService, /\(task\.Prerequisites\?\.Count \?\? 0\) == 0/);
+assert.match(privateRagService, /\(task\.Risks\?\.Count \?\? 0\) == 0/);
+assert.match(privateRagService, /phaseTasks\.SelectMany\(task => task\.CustomerResponsibilities \?\? \[\]\)\.Any\(\)/);
+assert.match(privateRagService, /phaseTasks\.SelectMany\(task => task\.UsSignalResponsibilities \?\? \[\]\)\.Any\(\)/);
+assert.match(privateRagService, /phaseTasks\.SelectMany\(task => task\.Prerequisites \?\? \[\]\)\.Any\(\)/);
+assert.match(privateRagService, /phaseTasks\.SelectMany\(task => task\.AcceptanceCriteria \?\? \[\]\)\.Any\(\)/);
+assert.match(privateRagService, /phaseTasks\.SelectMany\(task => task\.ValidationSteps \?\? \[\]\)\.Any\(\)/);
+assert.match(privateRagService, /phaseTasks\.SelectMany\(task => task\.Risks \?\? \[\]\)\.Any\(\)/);
+assert.match(privateRagService, /Module025ModelTaskItems/);
+assert.match(privateRagService, /"tasks", "workPackages", "work_packages", "scopeItems"/);
+assert.match(privateRagService, /"phases", "deliveryPhases", "lifecyclePhases"/);
+assert.match(privateRagService, /CitationIds: \[1\]/);
+assert.match(privateRagService, /Use the exact top-level property name tasks, not workPackages or scopeItems/);
+assert.match(privateRagService, /Module025DetailedPlanDiagnosticCode/);
+assert.match(privateRagService, /private_module025_detailed_plan_invalid_\{reason\}/);
+assert.match(privateRagService, /detailed-plan list fields must contain strings or text-bearing objects/);
+assert.match(privateRagService, /text-bearing objects must contain a JSON string value/);
+assert.match(privateRagService, /Milestones: ParseModule025DetailedMilestones\(root\)/);
+assert.match(privateRagService, /Module 025 detailed-plan milestone did not meet the customer-ready evidence contract/);
+assert.match(privateRagService, /ContainsCannedModule025ScopeLanguage/);
+assert.match(privateRagService, /value\.Contains\("cited scope"/);
+assert.match(privateRagService, /value\.Contains\("source-backed scope"/);
+assert.match(privateRagService, /Apply professional technical knowledge to determine the real sequence of work/);
+assert.match(privateRagService, /Determine the technology-specific work that must actually occur/);
+assert.match(
+  privateRagService,
+  /MaximumAnswerCharactersForPlanning\([\s\S]*?SowGsdPlanning => Math\.Max\(configuredMaximum, Module025SowMaximumAnswerCharacters\)/,
+  'Module 025 must allow the larger exhaustive JSON plan through the private-model response-size gate'
+);
+assert.match(
+  privateRagService,
+  /catch \(Exception exception\) when \(validateModule025DetailedPlan\)[\s\S]*?Module025DetailedPlanDiagnosticCode\(exception\)/,
+  'Module 025 schema and detail failures must fail closed instead of saving generic work packages'
+);
+assert.match(
+  privateRagService,
+  /Module025DeliveryPhases[\s\S]*?"Plan"[\s\S]*?"Design"[\s\S]*?"Implement"[\s\S]*?"Validate"[\s\S]*?"Release"/,
+  'the governed Module 025 parser must enforce exact P/D/I/V/R coverage'
+);
+assert.match(
+  privateRagService,
+  /query\.FeatureCode == CelarAiCapabilityCatalog\.SowGsdPlanning[\s\S]*?\? 0\.05m[\s\S]*?: flowHive/
+);
+assert.match(privateRagService, /hasExecutableDetail/);
+assert.doesNotMatch(
+  privateRagService,
+  /return string\.Equals\(task\.Name\?\.Trim\(\), phase, StringComparison\.OrdinalIgnoreCase\);/,
+  'a substantive private-model task must not be discarded solely because its name matches its phase'
+);
+assert.match(aiServices, /AddHttpClient\("PulseAiPrivateSowInference"/);
+assert.match(aiServices, /PulseAiPrivateSowInference[\s\S]*?TimeSpan\.FromSeconds\(3640\)/);
+assert.match(
+  aiServices,
+  /PrimaryMaximumOutputTokens = 12_000[\s\S]*?RecoveryMaximumOutputTokens = 10_000[\s\S]*?payload\["stream"\] = false;[\s\S]*?"Accept", "application\/json"/,
+  'Module 025 must use the protected gateway non-streaming contract with a bounded detailed output budget'
+);
+assert.match(
+  aiServices,
+  /IsOutputLimitedCompletionAsync[\s\S]*?IsInvalidJsonObjectCompletionAsync[\s\S]*?JsonDocument\.Parse\([\s\S]*?MaxDepth = 128/,
+  'Module 025 must use its bounded recovery attempt for truncated or malformed primary JSON'
+);
+for (const method of ['IsOutputLimitedCompletionAsync', 'IsInvalidJsonObjectCompletionAsync']) {
+  const start = aiServices.indexOf(`private static async Task<bool> ${method}`);
+  const end = aiServices.indexOf('\n    private static ', start + 1);
+  const body = aiServices.slice(start, end < 0 ? undefined : end);
+  assert.match(body, /PulseAiPrivateModelResponsePolicy\.IsSafetyRefusal\(root\)\) return false;/,
+    `${method} must preserve terminal safety refusals before retry classification`);
+  assert.ok(body.indexOf('IsSafetyRefusal(root)') < body.indexOf('root.TryGetProperty("choices"'),
+    `${method} must evaluate refusal policy before completion fields`);
+}
+assert.match(aiServices, /if \(content\.Length == 0\) return true;/,
+  'Empty private JSON completions must receive the bounded recovery attempt');
+assert.match(privateModelClient, /CelarAiCapabilityCatalog\.SowGsdPlanning[\s\S]*?"PulseAiPrivateSowInference"/);
+assert.match(privateModelClient, /private_model_output_truncated/);
+assert.match(privateModelClient, /ReadFinishReason/);
+assert.match(
+  aiServices,
+  /FlowHiveMaximumOutputTokens = 1_280[\s\S]*?IsFlowHivePlannerRequest[\s\S]*?SendFlowHivePlannerAsync/,
+  'FlowHive must use one compact transport attempt instead of the long SOW recovery sequence'
+);
+assert.match(
+  oracleRuntimeTests,
+  /CountFlowHiveAttempts[\s\S]*?FlowHive uses one compact transport attempt/,
+  'the Oracle transport regression must cover the actual FlowHive feature header path'
+);
+assert.match(module025Module, /CompositionDiagnosticCode/);
+assert.match(module025Module, /private_sow_work_packages_missing/);
+assert.match(module025Module, /private_sow_phase_coverage_incomplete/);
+assert.match(module025Module, /Missing phase coverage:/);
+assert.match(
+  module025Module,
+  /var normalizedPhase = phase\?\.Trim\(\)\.ToLowerInvariant\(\)[\s\S]*?PhaseCodes\.Contains\(normalizedPhase[\s\S]*?return normalizedPhase;[\s\S]*?var value = \$"\{phase\} \{name\} \{description\}"/,
+  'an exact governed phase value must win before description heuristics are considered'
+);
+assert.match(privateRagRepository, /citation\.SourceType,[\s\S]*?"module025_saved_service_overview"/);
+assert.match(privateRagRepository, /@answer_run_id,NULL,NULL,NULL,NULL,@source_type,@source_module/);
+assert.doesNotMatch(webProxy, /proxy_read_timeout 230s;/);
+assert.doesNotMatch(webProxy, /location ~ "\^\/api\/module025\/sow-gsd\/[\s\S]*?\/generate\$"/);
+assert.match(
+  webProxy,
+  /location \/api\/ \{[\s\S]*?proxy_read_timeout 60s;/,
+  'durable Module 025 generation must use the bounded generic API proxy window'
+);
+for (const source of [module033Workflow, celarSourceBoundary, celarPr630Validator]) {
+  assert.match(
+    source,
+    /fix\/module025-protected-uat-generation-verification-/,
+    'legacy CI compatibility must remain restricted to the reviewed Module 025 repair branch'
+  );
+}
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_PROTECTED_UAT_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_DURABLE_WORKER_REPAIR_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_COMPACT_PRIVATE_PLAN_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_SUBSTANTIVE_PHASE_TASK_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_EXACT_PHASE_AUTHORITY_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_BOUNDED_PRIVATE_OUTPUT_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_CITED_PHASE_EXPANSION_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_TOLERANT_CITED_SCOPE_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /CELAR_AI_MODULE025_READBACK_METADATA_CASE_BOUNDARY=PASSED/);
+assert.match(celarSourceBoundary, /! grep -Fq 'phd-west\.onenecklab\.com'/);
+for (const controllerValidator of [releaseControllerValidator, releaseControllerReregisteredValidator]) {
+  assert.match(controllerValidator, /\.github\/workflows\/deep-intelligence-read-contract-ci\.yml/);
+  assert.match(controllerValidator, /src\/backend\/ProjectTime\.Api\/Ai\/ProjectPulseAiServiceCollectionExtensions\.cs/);
+  assert.match(controllerValidator, /src\/backend\/ProjectTime\.Api\/Ai\/PulseAiPrivateModelClient\.cs/);
+}
+assert.match(deepIntelligenceWorkflow, /'\/api\/project-flowhive\/projects\/'/);
+assert.match(deepIntelligenceWorkflow, /'\/ai-planner\/runs'/);
+assert.doesNotMatch(deepIntelligenceWorkflow, /assert_js_marker[\s\S]{0,1200}'\/api\/project-flowhive\/ai\/production-generate'/);
+assert.match(module033Workflow, /MODULE_033_MODULE025_ASYNC_PROXY_REGRESSION_BOUNDARY=PASSED/);
+assert.match(celarPr630Validator, /CELAR_PR630_MODULE025_PROTECTED_UAT_COMPATIBILITY=PASS/);
+assert.match(workflow, /093_assigned_work_canonical_visibility_repair\.sql/);
+assert.match(workflow, /097_project_planning_identity_safe_admission\.sql/);
+assert.match(workflow, /097_project_planning_identity_safe_admission_rollback\.sql/);
+assert.match(workflow, /test-project-planning-identity-safe-admission-migration-097\.sh/);
+assert.match(workflow, /test-pulse-ai-runtime-job-query-shape\.sh/);
+assert.match(workflow, /Apply and verify governed migrations through Module 025 project-name migration 109 inside Test private network/);
+assert.match(workflow, /109_module025_project_name/);
+assert.match(workflow, /MIGRATION_093=APPLIED_AND_VERIFIED/);
+assert.match(workflow, /migration097:"applied_and_verified"/);
+assert.match(workflow, /migration098OwnerStorage:"applied_and_verified"/);
+assert.match(workflow, /migration098CustomerSource:"applied_and_verified"/);
+assert.match(workflow, /migration099:"applied_and_verified"/);
+assert.match(workflow, /migration100:"applied_and_verified"/);
+assert.match(
+  workflow,
+  /\(NOT EXISTS \(\s*SELECT 1\s*FROM work_register_task_assignment_history history[\s\S]*?\)\)::text;/,
+  'Migration 093 verification must cast the complete NOT EXISTS predicate after boolean evaluation'
+);
+assert.doesNotMatch(
+  workflow,
+  /\n\s{12}NOT EXISTS \(\s*SELECT 1\s*FROM work_register_task_assignment_history history/,
+  'Migration 093 verification must not apply NOT to a text-cast EXISTS result'
+);
+
+assert.match(
+  revisionWait,
+  /MODULE001B_PROTECTED_TEST_RECONCILE=false/,
+  'Module 001B reconciliation must remain opt-in rather than changing the generic readiness helper'
+);
+assert.match(
+  revisionWait,
+  /\*--m1be-\*\|\*--m1bd-\*/,
+  'only Module 001B protected-Test fixture revisions may enter stale-revision reconciliation'
+);
+assert.match(
+  revisionWait,
+  /Refusing Module 001B revision reconciliation because the Container App is not tagged Test\./,
+  'Module 001B reconciliation must fail closed outside the Test-tagged Container App'
+);
+assert.match(
+  revisionWait,
+  /Refusing Module 001B revision reconciliation because the Container App is not in Single revision mode\./,
+  'Module 001B reconciliation must require Single revision mode'
+);
+assert.match(
+  revisionWait,
+  /Refusing Module 001B revision reconciliation because a different revision is now latest:/,
+  'Module 001B reconciliation must refuse to mutate after a concurrent newer revision appears'
+);
+assert.match(
+  revisionWait,
+  /az containerapp revision deactivate/,
+  'Module 001B protected-Test reconciliation must deactivate stale active revisions explicitly'
+);
+assert.doesNotMatch(
+  revisionWait,
+  /if \[\[ "\$ACTIVE" == true \]\]; then/,
+  'Module 001B reconciliation must not require the newly-ready revision to be active before deactivating stale revisions'
+);
+assert.match(
+  revisionWait,
+  /requiring ACTIVE=true here creates a circular wait/,
+  'Module 001B reconciliation must document the ready-but-inactive Single-mode handoff'
+);
+assert.match(
+  revisionWait,
+  /singleRevisionConverged=true/,
+  'Module 001B reconciliation must prove sole-active convergence before returning success'
+);
+assert.doesNotMatch(
+  revisionWait,
+  /containerapp ingress traffic set/,
+  'Module 001B reconciliation must not restore manual ingress traffic manipulation'
+);
+assert.doesNotMatch(
+  revisionWait,
+  /--revision-weight/,
+  'Module 001B reconciliation must not restore revision-weight manipulation'
+);
+const revisionWaitSyntax = spawnSync('bash', ['-n', revisionWaitPath], { encoding: 'utf8' });
+assert.equal(revisionWaitSyntax.status, 0, revisionWaitSyntax.stderr);
+
+for (const [label, source] of [
+  ['generic revision waiter', revisionWait],
+  ['Module 001B convergence waiter', assignedWorkUat]
+]) {
+  assert.doesNotMatch(
+    source,
+    /<<<"\$\{[A-Za-z_][A-Za-z0-9_]*:-\{\}\}"/,
+    `${label} must not append a closing brace to non-empty Azure JSON through an ambiguous Bash object fallback`
+  );
+}
+assert.match(
+  revisionWait,
+  /jq -e 'type == "object"' <<<"\$REVISION_JSON"/,
+  'the generic revision waiter must normalize Azure revision JSON before extracting fields'
+);
+assert.match(
+  assignedWorkUat,
+  /jq -e 'type == "object"' <<<"\$app_json"/,
+  'the Module 001B convergence waiter must normalize the Container App object'
+);
+assert.match(
+  assignedWorkUat,
+  /jq -e 'type == "array"' <<<"\$revisions_json"/,
+  'the Module 001B convergence waiter must normalize the revision array'
+);
+assert.doesNotMatch(
+  module001bFixture,
+  /DELETE FROM scoped_time_management_events/,
+  'Module 001B fixture cleanup must preserve immutable time-management audit evidence'
+);
+assert.doesNotMatch(
+  module001bFixture,
+  /DELETE FROM module001_timesheet_entry_associations/,
+  'Module 001B fixture cleanup must rely on the entry-association ON DELETE CASCADE contract'
+);
+assert.match(
+  module001bFixture,
+  /entry-association foreign key is ON DELETE CASCADE[\s\S]*?immutable steward events are deliberately[\s\S]*?retained/,
+  'Module 001B fixture cleanup must document its immutable-evidence and cascading-association contract'
+);
+assert.match(
+  module001bFixture,
+  /NOT EXISTS \(\s*SELECT 1\s*FROM scoped_time_management_events audit\s*WHERE audit\.timesheet_id = t\.timesheet_id\s*\)/,
+  'Module 001B fixture cleanup must retain an empty fixture timesheet while immutable audit evidence references it'
+);
+assert.match(
+  module001bFixture,
+  /FROM module001a_engineer_task_closeouts closeout[\s\S]*?closeout\.engineer_user_id = @target_user_id[\s\S]*?closeout\.closeout_status IN \('engineer_closed', 'ptc_final_closed'\)/,
+  'Module 001B fixture creation must not select a source task closed for the target engineer'
+);
+assert.match(
+  module001bFixture,
+  /source\.Parameters\.AddWithValue\("target_user_id", targetUserId\.Value\)/,
+  'Module 001B fixture source selection must bind the protected-Test target user explicitly'
+);
+
+const convergenceFunctionStart = assignedWorkUat.indexOf('module001b_wait_single_revision_converged() {');
+const convergenceFunctionEnd = assignedWorkUat.indexOf('\nmodule001b_disable_gate() {', convergenceFunctionStart);
+assert.ok(convergenceFunctionStart >= 0, 'the Module 001B convergence function must exist');
+assert.ok(convergenceFunctionEnd > convergenceFunctionStart, 'the Module 001B convergence function boundary must remain testable');
+const convergenceFunction = assignedWorkUat.slice(convergenceFunctionStart, convergenceFunctionEnd);
+
+const mockRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'module001b-convergence-'));
+try {
+  const mockAzPath = path.join(mockRoot, 'az');
+  fs.writeFileSync(mockAzPath, [
+    '#!/usr/bin/env bash',
+    'set -Eeuo pipefail',
+    'case "$*" in',
+    '  *"--query properties.latestReadyRevisionName"*) printf "%s\\n" "$MOCK_EXPECTED_REVISION" ;;',
+    '  *"containerapp revision show"*) printf "%s\\n" "$MOCK_REVISION_SHOW_JSON" ;;',
+    '  *"containerapp revision list"*) printf "%s\\n" "$MOCK_REVISION_LIST_JSON" ;;',
+    '  *"containerapp show"*) printf "%s\\n" "$MOCK_APP_JSON" ;;',
+    '  *"containerapp revision activate"*|*"containerapp revision deactivate"*) exit 0 ;;',
+    '  *) printf "unexpected mock az invocation: %s\\n" "$*" >&2; exit 64 ;;',
+    'esac',
+    ''
+  ].join('\n'), { encoding: 'utf8', mode: 0o755 });
+
+  const expectedRevision = 'ca-protected-test-api--m1be-regression-1';
+  const expectedImage = 'acr.example.invalid/project-time-api@sha256:1234567890abcdef';
+  const mockEnv = {
+    ...process.env,
+    PATH: `${mockRoot}:${process.env.PATH ?? ''}`,
+    MOCK_EXPECTED_REVISION: expectedRevision,
+    MOCK_EXPECTED_IMAGE: expectedImage,
+    MOCK_APP_JSON: JSON.stringify({
+      tags: { environment: 'test' },
+      properties: {
+        configuration: { activeRevisionsMode: 'Single' },
+        latestRevisionName: expectedRevision,
+        latestReadyRevisionName: expectedRevision
+      }
+    }),
+    MOCK_REVISION_LIST_JSON: JSON.stringify([{
+      name: expectedRevision,
+      properties: {
+        active: true,
+        provisioningState: 'Provisioned',
+        healthState: 'Healthy',
+        trafficWeight: 100,
+        template: { containers: [{ image: expectedImage }] }
+      }
+    }]),
+    MOCK_REVISION_SHOW_JSON: JSON.stringify({
+      image: expectedImage,
+      provisioningState: 'Provisioned',
+      healthState: 'Healthy',
+      active: true,
+      trafficWeight: 100
+    })
+  };
+
+  const genericWaitBehavior = spawnSync(
+    'bash',
+    [revisionWaitPath, 'protected-test-rg', 'protected-test-api', expectedRevision, expectedImage, '1', '1'],
+    { encoding: 'utf8', env: mockEnv }
+  );
+  assert.equal(genericWaitBehavior.status, 0, genericWaitBehavior.stderr);
+  assert.match(genericWaitBehavior.stdout, /CONTAINERAPP_CANDIDATE_READY[\s\S]*singleRevisionConverged=true/);
+  assert.doesNotMatch(genericWaitBehavior.stderr, /jq: (?:parse )?error/i);
+
+  const convergenceHarness = [
+    'set -Eeuo pipefail',
+    'MODULE001B_API_RG=protected-test-rg',
+    'MODULE001B_API_APP=protected-test-api',
+    'MODULE001B_API_IMAGE="$MOCK_EXPECTED_IMAGE"',
+    convergenceFunction,
+    'module001b_wait_single_revision_converged enabled "$MOCK_EXPECTED_REVISION"',
+    ''
+  ].join('\n');
+  const module001bWaitBehavior = spawnSync('bash', ['-c', convergenceHarness], {
+    encoding: 'utf8',
+    env: mockEnv
+  });
+  assert.equal(module001bWaitBehavior.status, 0, module001bWaitBehavior.stderr);
+  assert.match(module001bWaitBehavior.stderr, /revisionActive=true imageMatch=true/);
+  assert.match(module001bWaitBehavior.stderr, /MODULE001B_SINGLE_REVISION_CONVERGED label=enabled/);
+  assert.doesNotMatch(module001bWaitBehavior.stderr, /jq: (?:parse )?error/i);
+  assert.doesNotMatch(module001bWaitBehavior.stderr, /revisionActive=true\s+false imageMatch=true/);
+} finally {
+  fs.rmSync(mockRoot, { recursive: true, force: true });
+}
+
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /099_module025_sow_gsd_workspace\.sql/,
+  'the governed private-network migration image must carry Module 025 migration 099'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /psql -X -v ON_ERROR_STOP=1 --file "\$MODULE025_MIGRATION"/,
+  'the governed private-network migration job must execute Module 025 migration 099'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /module025_verification=/,
+  'the governed migration job must verify Module 025 workspace schema readiness'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /to_regclass\('public\.module025_sow_gsd_engagements'\)/,
+  'Module 025 migration verification must prove the engagement workspace table exists'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /MIGRATION_099_MODULE025_SOW_GSD=APPLIED_AND_VERIFIED/,
+  'the governed migration job must publish an explicit migration 099 success marker'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /migration-099\.json/,
+  'the governed migration job must emit migration 099 release evidence'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /100_module001b_catalog_ownership_reconciliation\.sql/,
+  'the governed private-network migration image must carry Module 001B catalog migration 100'
+);
+assert.match(
+  documentAuthorityMigrationBuilder,
+  /psql -X -v ON_ERROR_STOP=1 --file "\$MODULE001B_CATALOG_MIGRATION"/,
+  'the governed private-network migration job must execute Module 001B catalog migration 100'
+);
+assert.match(documentAuthorityMigrationBuilder, /MIGRATION_100_MODULE001B_CATALOG=APPLIED_AND_VERIFIED/);
+assert.match(documentAuthorityMigrationBuilder, /migration-100\.json/);
+assert.match(module001bCatalogMigration, /'001B'/);
+assert.match(module001bCatalogMigration, /'Time Reallocation & Corrections'/);
+assert.match(module001bCatalogMigration, /ownershipDoesNotGrantAccess/);
+assert.match(module001bCatalogMigration, /100_module001b_catalog_ownership_reconciliation/);
+assert.match(module001bCatalogRollback, /Rollback 100 refused: Module 001B ownership changed after reconciliation/);
+assert.match(module001bCatalogRollback, /migration_id = '100_module001b_catalog_ownership_reconciliation'/);
+
+assert.match(
+  apiProject,
+  /<AssemblyMetadata Include="ProjectPulseSourceRevision" Value="\$\(ProjectPulseSourceRevision\)" \/>/,
+  'API assembly metadata must remain bound to the ProjectPulseSourceRevision MSBuild property'
+);
+assert.match(
+  apiBuildProps,
+  /Exists\('\$\(MSBuildProjectDirectory\)\/\.projectpulse-source-revision'\)/,
+  'API build props must activate exact source binding only when the temporary release revision file exists'
+);
+assert.match(
+  apiBuildProps,
+  /<ProjectPulseSourceRevision>\$\(\[System\.IO\.File\]::ReadAllText\('\$\(MSBuildProjectDirectory\)\/\.projectpulse-source-revision'\)\)<\/ProjectPulseSourceRevision>/,
+  'API build props must read the exact staged release SHA into ProjectPulseSourceRevision'
+);
+
+const releaseCommit = (process.env.TARGET_RELEASE_COMMIT ?? '').trim().toLowerCase();
+if (releaseCommit.length > 0) {
+  assert.match(
+    releaseCommit,
+    /^[0-9a-f]{40}$/,
+    'the governed Protected-Test controller must supply an exact 40-character release SHA'
+  );
+  assert.equal(
+    fs.existsSync(sourceRevisionPath),
+    false,
+    'the temporary source-revision file must not exist in reviewed source'
+  );
+  fs.writeFileSync(sourceRevisionPath, releaseCommit, { encoding: 'utf8', mode: 0o444 });
+  assert.equal(
+    fs.readFileSync(sourceRevisionPath, 'utf8'),
+    releaseCommit,
+    'the temporary source-revision file must contain only the exact governed release SHA'
+  );
+  console.log(`SYSTEMWIDE_API_SOURCE_REVISION_STAGED=${releaseCommit}`);
+}
+
+const migrationImageBuilders = [
+  ['094', 'scripts/release-test/build-and-run-flowhive-authority-migration-094-job.sh'],
+  ['095', 'scripts/release-test/build-and-run-project-planning-collaboration-migration-job.sh'],
+  ['096+097+098+099', documentAuthorityMigrationBuilderPath]
+];
+for (const [migration, builderPath] of migrationImageBuilders) {
+  const builder = fs.readFileSync(builderPath, 'utf8');
+  assert.match(
+    builder,
+    /DOCKERFILE="\$CONTEXT\/Dockerfile"/,
+    `Migration ${migration} must bind the Dockerfile to its generated ACR context`
+  );
+  assert.match(
+    builder,
+    /\[\[ -f "\$DOCKERFILE" \]\]/,
+    `Migration ${migration} must prove the generated Dockerfile exists before ACR build`
+  );
+  assert.match(
+    builder,
+    /--file "\$DOCKERFILE"/,
+    `Migration ${migration} must pass the absolute generated Dockerfile path to Azure ACR`
+  );
+  assert.doesNotMatch(
+    builder,
+    /--file Dockerfile(?:\s|\\)/,
+    `Migration ${migration} must not resolve Dockerfile from the caller working directory`
+  );
+  assert.match(
+    builder,
+    /"\$CONTEXT"; then/,
+    `Migration ${migration} must upload the same context that owns its Dockerfile`
+  );
+}
+
+const bashScript = [
+  'set -Eeuo pipefail',
+  "UNIQUE_TAG='validation-tag'",
+  'build_image_contract() {',
+  '  local repository="$1" dockerfile="$2" context="$3"',
+  '  local image="${repository}:${UNIQUE_TAG}"',
+  `  printf '%s|%s|%s|%s\\n' "$repository" "$dockerfile" "$context" "$image"`,
+  '}',
+  "build_image_contract 'repository' 'Dockerfile' '.'"
+].join('\n');
+
+const bashProbe = spawnSync('bash', ['-c', bashScript], { encoding: 'utf8' });
+assert.equal(bashProbe.status, 0, bashProbe.stderr);
+assert.equal(bashProbe.stdout.trim(), 'repository|Dockerfile|.|repository:validation-tag');
+
+console.log('SYSTEMWIDE_IMAGE_BUILD_CONTROLLER_VALIDATION=PASS governed-controller=projectpulse-deploy-test local-initialization=ordered acr-path=context-owned docker-fallback=full_image api-source-provenance=temporary-revision-file migration-builders=094,095,096+097+098+099+100 utilization-uat=registered module001b-single-revision-reconcile=ready-inactive-safe module001b-fixture-audit=immutable module001b-catalog-migration100=registered module025-migration099=registered module025-generation-detail-uat=registered');

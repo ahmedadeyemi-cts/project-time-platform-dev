@@ -1,0 +1,2188 @@
+name: Deploy System-wide Enterprise Reliability and Utilization to Protected Test
+
+run-name: Protected Test ${{ github.event_name == 'workflow_dispatch' && inputs.release_sha || github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      qualification_provider:
+        description: 'none deploys normally; claude/openai qualifies one Plan phase WITHOUT application deployment'
+        required: false
+        default: none
+        type: choice
+        options: [none, claude, openai]
+      acceptance_scope:
+        description: 'full runs system-wide UAT; sow_role runs normal SA SOW/GSD and My Role without FlowHive generation; sow_exports verifies saved task exports without any generation'
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - sow_role
+          - sow_exports
+      recover_private_runtime:
+        description: Run authenticated Oracle Test recovery before deployment
+        required: false
+        default: false
+        type: boolean
+      release_sha:
+        description: Exact 40-character candidate commit to deploy to Protected Test
+        required: true
+        type: string
+      release_branch:
+        description: Exact authorized candidate branch
+        required: true
+        default: release/flowhive-sow-successor-20260908
+        type: string
+      admission_controller_sha:
+        description: Controller SHA read by the trusted PSA admission workflow
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+concurrency:
+  group: projectpulse-deploy-test
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate, migrate, deploy, and verify protected Test
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.release_branch == 'main' ||
+      inputs.release_branch == 'release/flowhive-sow-successor-20260908')
+    environment: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      ACCEPTANCE_SCOPE: ${{ inputs.acceptance_scope || 'full' }}
+      TARGET_RELEASE_COMMIT: ${{ inputs.release_sha }}
+      TARGET_RELEASE_BRANCH: ${{ inputs.release_branch }}
+      EVIDENCE_DIR: /tmp/systemwide-enterprise-reliability-test-evidence
+      MIGRATION_SCOPE: systemwide-enterprise-reliability-test
+      APPROVAL_REFERENCE: ORACLE-TEST-USER-AUTHORIZED-RECOVERY-20260905
+      ORACLE_RUNTIME_HOST: celarai.onenecklab.com
+      ORACLE_READINESS_ENDPOINT: https://celarai.onenecklab.com/health
+      ORACLE_INFERENCE_ENDPOINT: https://celarai.onenecklab.com/v1/chat/completions
+      ORACLE_EMBEDDING_ENDPOINT: https://celarai.onenecklab.com/v1/embeddings
+      ORACLE_OCR_ENDPOINT: https://celarai.onenecklab.com/v1/extract
+      ORACLE_MALWARE_SCAN_ENDPOINT: https://celarai.onenecklab.com/v1/scan
+      ORACLE_GENERATION_MODEL: gemma3:4b
+      ORACLE_EMBEDDING_MODEL: embeddinggemma
+      ORACLE_OCR_MODEL: tesseract-5-eng
+      TOKEN_SECRET_NAME: celar-oracle-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Check out trusted main control plane for the PSA candidate
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.event_name == 'workflow_dispatch' && inputs.release_branch == 'release/flowhive-sow-successor-20260908') }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out exact authorized release
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_sha || github.sha }}
+          path: release
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate qualification-only selection
+        working-directory: release
+        shell: bash
+        env:
+          QUALIFICATION_PROVIDER: ${{ inputs.qualification_provider || 'none' }}
+          RECOVER_PRIVATE_RUNTIME: ${{ inputs.recover_private_runtime }}
+          EXPECTED_CONTROLLER_SHA: ${{ inputs.admission_controller_sha }}
+        run: |
+          set -Eeuo pipefail
+          case "$QUALIFICATION_PROVIDER" in
+            none) exit 0 ;;
+            claude|openai) ;;
+            *) echo 'Unsupported qualification provider.' >&2; exit 1 ;;
+          esac
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo 'A repeat requires a new explicit manual run.'; exit 1; }
+          [[ "$TARGET_RELEASE_BRANCH" == main && "$TARGET_RELEASE_COMMIT" == "$GITHUB_SHA" ]]
+          [[ "$ACCEPTANCE_SCOPE" == sow_role && "$RECOVER_PRIVATE_RUNTIME" != true && -z "$EXPECTED_CONTROLLER_SHA" ]]
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" && "$(git rev-parse origin/main)" == "$GITHUB_SHA" ]]
+
+      - name: Verify admitted controller identity before deployment mutations
+        shell: bash
+        env:
+          EXPECTED_CONTROLLER_SHA: ${{ inputs.admission_controller_sha }}
+          RELEASE_BRANCH_INPUT: ${{ inputs.release_branch }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || fail 'Protected Test controller must execute from main.'
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'The executing controller SHA is not complete.'
+          if [[ -d control/.git ]]; then
+            [[ "$(git -C control rev-parse HEAD)" == "$GITHUB_SHA" ]] || fail 'Trusted control checkout does not match the executing controller.'
+          fi
+          case "$ACCEPTANCE_SCOPE" in
+            full) ;;
+            sow_role|sow_exports)
+              [[ "$RELEASE_BRANCH_INPUT" == main ]] || fail 'Scoped Module 025 deployment requires exact merged main.'
+              ;;
+            *) fail 'Unsupported deployment acceptance scope.' ;;
+          esac
+          if [[ "$ACCEPTANCE_SCOPE" == sow_exports ]]; then
+            [[ '${{ inputs.recover_private_runtime }}' != true && '${{ inputs.qualification_provider }}' != claude && '${{ inputs.qualification_provider }}' != openai ]] \
+              || fail 'Export acceptance cannot perform runtime recovery or provider qualification.'
+          fi
+          case "$GITHUB_EVENT_NAME:$RELEASE_BRANCH_INPUT" in
+            workflow_dispatch:release/flowhive-sow-successor-20260908)
+              [[ "$EXPECTED_CONTROLLER_SHA" == "$GITHUB_SHA" ]] || fail 'PSA admission controller identity changed before deployment.'
+              ;;
+            workflow_dispatch:main|workflow_dispatch:fix/shared-project-document-planning-20260819)
+              [[ -z "$EXPECTED_CONTROLLER_SHA" ]] || fail 'Admission controller input is only valid for the PSA candidate lane.'
+              ;;
+            *)
+              fail 'Unsupported Protected Test trigger/branch combination.'
+              ;;
+          esac
+          echo "PROTECTED_TEST_CONTROLLER_IDENTITY=$GITHUB_SHA"
+
+      - name: Require protected Test login credential
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        shell: bash
+        env:
+          TEST_LOGIN_PASSWORD: ${{ secrets.PROJECTPULSE_M087_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          [[ ${#TEST_LOGIN_PASSWORD} -ge 12 ]] || {
+            echo 'ERROR: The Test environment secret PROJECTPULSE_M087_PASSWORD is required for authenticated UAT.' >&2
+            exit 1
+          }
+          unset TEST_LOGIN_PASSWORD
+          echo 'PROTECTED_TEST_LOGIN_SECRET=AVAILABLE'
+
+      - name: Set up Node 22
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: release/src/frontend/project-time-web/package-lock.json
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Compile the isolated one-phase runner
+        if: inputs.qualification_provider == 'claude' || inputs.qualification_provider == 'openai'
+        working-directory: release
+        run: |
+          dotnet publish tests/FlowHiveDetailedPlannerTests --configuration Release --output "$RUNNER_TEMP/module025-qualification-image"
+          cp deployment/module025-qualification/Dockerfile "$RUNNER_TEMP/module025-qualification-image/Dockerfile"
+
+      - name: Admit the exact reviewed PSA candidate using trusted main controls
+        id: psa_admission
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.event_name == 'workflow_dispatch' && inputs.release_branch == 'release/flowhive-sow-successor-20260908') }}
+        working-directory: control
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOVER_PRIVATE_RUNTIME: ${{ inputs.recover_private_runtime }}
+        run: node scripts/release-test/flowhive-psa-admission.mjs
+
+      - name: Verify existing PM and uploaded SOW before deployment
+        id: psa_acceptance_preflight
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (steps.psa_admission.outputs.authorized == 'true') }}
+        shell: bash
+        working-directory: control
+        env:
+          BASE: https://phd-west-test.onenecklab.com
+          PROJECTPULSE_M025_PM_EMAIL: ${{ secrets.PROJECTPULSE_M025_PM_EMAIL }}
+          PROJECTPULSE_M025_PM_PASSWORD: ${{ secrets.PROJECTPULSE_M025_PM_PASSWORD }}
+          PREVIOUS_PLANNER_RUN_ID: 171e4430-95e4-4f80-be14-454dcc319ef2
+        run: python3 scripts/release-test/check-flowhive-acceptance-inputs.py --read-only
+
+      - name: Install isolated live-browser acceptance dependencies
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (steps.psa_admission.outputs.authorized == 'true' || inputs.acceptance_scope == 'full' || inputs.acceptance_scope == 'sow_role' || inputs.acceptance_scope == 'sow_exports') }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m venv "$RUNNER_TEMP/flowhive-psa-browser"
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/pip" install playwright==1.57.0
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" -m playwright install --with-deps chromium
+
+      - name: Guard exact source and validate release
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: release
+        shell: bash
+        working-directory: release
+        env:
+          PSA_RELEASE_AUTHORIZED: ${{ steps.psa_admission.outputs.authorized }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          RELEASE_COMMIT="$(git rev-parse HEAD)"
+          [[ "$RELEASE_COMMIT" == "$TARGET_RELEASE_COMMIT" ]] || fail 'The checkout is not the exact requested release.'
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            [[ "$TARGET_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail 'The requested release SHA is invalid.'
+            if [[ "$TARGET_RELEASE_BRANCH" == 'main' ]]; then
+              git fetch --no-tags origin main
+              [[ "$(git rev-parse origin/main)" == "$TARGET_RELEASE_COMMIT" ]] \
+                || fail 'The requested merged-main SHA is not the current main branch head.'
+            elif [[ "$TARGET_RELEASE_BRANCH" == 'release/flowhive-sow-successor-20260908' ]]; then
+              [[ "$GITHUB_REF" == 'refs/heads/main' && "$PSA_RELEASE_AUTHORIZED" == 'true' ]] \
+                || fail 'The exact PSA candidate requires trusted main admission and passing exact-SHA CI.'
+              [[ "$(git rev-parse HEAD)" == "$TARGET_RELEASE_COMMIT" ]] || fail 'PSA candidate identity changed.'
+            else
+              [[ "$TARGET_RELEASE_BRANCH" == 'fix/shared-project-document-planning-20260819' ]] \
+                || fail 'Only the authorized FlowHive V2 candidate branch or exact merged main may use manual Protected-Test deployment.'
+              git fetch --no-tags origin "$TARGET_RELEASE_BRANCH"
+              [[ "$(git rev-parse "origin/$TARGET_RELEASE_BRANCH")" == "$TARGET_RELEASE_COMMIT" ]] \
+                || fail 'The requested candidate SHA is not the current authorized branch head.'
+            fi
+          fi
+          for required in \
+            .github/workflows/projectpulse-deploy-test.yml \
+            scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh \
+            scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh \
+            scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh \
+            scripts/release-test/run-assigned-work-protected-test-uat.sh \
+            database/migrations/086_module_066_flowhive_enterprise_pm.sql \
+            database/migrations/088_systemwide_enterprise_reliability.sql \
+            database/migrations/093_assigned_work_canonical_visibility_repair.sql \
+            database/migrations/094_flowhive_canonical_sow_authority.sql \
+            database/migrations/095_project_planning_collaboration_access.sql \
+            database/migrations/096_project_planning_document_authority.sql \
+            database/migrations/097_project_planning_identity_safe_admission.sql \
+            database/migrations/103_module_066_flowhive_enterprise_psa_revamp.sql \
+            database/migrations/104_flowhive_bounded_ai_execution.sql \
+            database/migrations/105_flowhive_reviewed_regeneration.sql \
+            database/migrations/106_module025_sow_sell_register.sql \
+            database/migrations/107_module_066_operation_authorization_and_raid_actor.sql \
+            database/migrations/109_module025_project_name.sql \
+            database/migrations/125_automatic_document_admission_laya.sql \
+            database/migrations/127_flowhive_pm_automatic_planning_defaults.sql \
+            database/rollback/096_project_planning_document_authority_rollback.sql \
+            database/rollback/127_flowhive_pm_automatic_planning_defaults_rollback.sql \
+            database/rollback/097_project_planning_identity_safe_admission_rollback.sql \
+            database/rollback/103_module_066_flowhive_enterprise_psa_revamp_rollback.sql \
+            database/rollback/104_flowhive_bounded_ai_execution_rollback.sql \
+            database/rollback/105_flowhive_reviewed_regeneration_rollback.sql \
+            database/rollback/107_module_066_operation_authorization_and_raid_actor_rollback.sql \
+            scripts/release-test/build-and-run-flowhive-authority-migration-094-job.sh \
+            scripts/release-test/run-flowhive-authority-migration-094-job.sh \
+            scripts/release-test/build-and-run-project-planning-collaboration-migration-job.sh \
+            scripts/release-test/run-project-planning-collaboration-migration-job.sh \
+            scripts/release-test/build-and-run-project-planning-document-authority-migration-job.sh \
+            scripts/release-test/run-project-planning-document-authority-migration-job.sh \
+            tests/test-project-planning-document-authority-migration-096.sh \
+            tests/test-project-planning-identity-safe-admission-migration-097.sh \
+            tests/test-pulse-ai-runtime-job-query-shape.sh \
+            src/backend/ProjectTime.Api/Ai/PulseAiPrivateRagService.cs \
+            src/backend/ProjectTime.Api/Modules/ProjectPlanningDocumentResolver.cs \
+            src/backend/ProjectTime.Api/Modules/ProjectPlanningAiOrchestrator.cs \
+            src/backend/ProjectTime.Api/Modules/ProjectFlowHiveAiPlannerOrchestrationModule.cs \
+            src/backend/ProjectTime.Api/Modules/ProjectForgeModule.cs \
+            tests/validate-shared-project-document-planning.mjs \
+            src/backend/ProjectTime.Api/Ai/CelarAiAuthoritativePublicFactService.cs \
+            src/backend/ProjectTime.Api/Modules/AdminAuditTelemetryMiddleware.cs \
+            src/frontend/project-time-web/src/enterprise-systemwide-reliability.css \
+            src/frontend/project-time-web/src/ProjectFlowHiveCenter.jsx \
+            src/frontend/project-time-web/src/CostOverrunAlertCenter.jsx \
+            src/frontend/project-time-web/src/enterprise/SalesDeliveryWorkflowCenter.jsx \
+            tests/validate-utilization-role-scoping.mjs \
+            tests/validate-systemwide-image-build-controller.mjs \
+            tests/validate-systemwide-enterprise-reliability.mjs \
+            tests/validate-celar-ai-flowhive-authoritative-release.mjs \
+            deployment/containers/api/Dockerfile \
+            deployment/containers/web/Dockerfile; do
+            test -f "$required" || fail "Required release artifact is missing: $required"
+          done
+
+          bash -n scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          bash -n scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh
+          bash -n scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh
+          bash -n scripts/release-test/run-assigned-work-protected-test-uat.sh
+          node tests/validate-utilization-role-scoping.mjs
+          node tests/validate-systemwide-image-build-controller.mjs
+          node tests/validate-systemwide-enterprise-reliability.mjs
+          node tests/validate-celar-ai-flowhive-authoritative-release.mjs
+          node tests/validate-shared-project-document-planning.mjs
+          node tests/validate-flowhive-sow-evidence-autoadmission.mjs
+          node tests/validate-project-planning-collaboration-access.mjs
+          (
+            cd src/frontend/project-time-web
+            node scripts/validate-module-066-project-flowhive.mjs
+            node scripts/validate-module-033-project-forge.mjs
+          )
+          bash tests/test-module-066-flowhive-enterprise-pm-migration-086.sh
+          bash tests/test-systemwide-enterprise-reliability-migration-088.sh
+          bash tests/test-flowhive-canonical-sow-authority-migration-094.sh
+          bash tests/test-project-planning-collaboration-migration-095.sh
+          bash tests/test-project-planning-document-authority-migration-096.sh
+          bash tests/test-project-planning-identity-safe-admission-migration-097.sh
+          bash tests/test-pulse-ai-runtime-job-query-shape.sh
+          node src/frontend/project-time-web/scripts/validate-module-loading-assignment-propagation.mjs
+          dotnet run --project tests/CelarAiAuthoritativePublicFactTests/CelarAiAuthoritativePublicFactTests.csproj --configuration Release
+          dotnet build src/backend/ProjectTime.Api/ProjectTime.Api.csproj --configuration Release
+          bash tests/test-projectpulse-api-startup.sh
+
+          (
+            cd src/frontend/project-time-web
+            npm ci --no-audit --no-fund
+            npm audit --audit-level=high
+            npm run build
+          )
+
+          git diff --check
+          install -d -m 0700 "$EVIDENCE_DIR"
+          jq -n \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --arg migrationScope "$MIGRATION_SCOPE" \
+            '{
+              environment:"test",
+              applicationRelease:$releaseCommit,
+              migrations:["086_module_066_flowhive_enterprise_pm","088_systemwide_enterprise_reliability","093_assigned_work_canonical_visibility_repair","094_flowhive_canonical_sow_authority","095_project_planning_collaboration_access","096_project_planning_document_authority","097_project_planning_identity_safe_admission","115_module_066_task_notifications","121_flowhive_sequential_phase_checkpoints","122_flowhive_automatic_first_draft","123_module064_external_generation_approval","124_module025_service_scope","125_automatic_document_admission_laya","127_flowhive_pm_automatic_planning_defaults"],
+              migrationScope:$migrationScope,
+              module025SowGsdUat:true,
+              utilizationRoleScopingUat:true,
+              assignedWorkUat:true,
+              sharedProjectDocumentPlanning:true,
+              flowHiveAiPlannerUat:true,
+              projectForgeAiPlannerUat:true,
+              celarStabilityUat:true,
+              applicationOnlyAfterMigration:true,
+              productionMutation:false,
+              privateRuntimeConfigurationMutation:false
+            }' > "$EVIDENCE_DIR/release-boundary.json"
+
+          echo "release_commit=$RELEASE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo 'ENVIRONMENT_SCOPE=PROTECTED_TEST_ONLY'
+          echo 'PRODUCTION_MUTATION=NONE'
+
+      - name: Sign in to protected Test subscription
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Qualify one phase in the Test private network
+        if: inputs.qualification_provider == 'claude' || inputs.qualification_provider == 'openai'
+        working-directory: release
+        timeout-minutes: 25
+        env:
+          QUALIFICATION_PROVIDER: ${{ inputs.qualification_provider }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+          AZURE_CELAR_MIGRATOR_IDENTITY_RESOURCE_ID: ${{ vars.AZURE_CELAR_MIGRATOR_IDENTITY_RESOURCE_ID }}
+        run: python3 scripts/release-test/run-module025-provider-qualification.py
+
+      - name: Upload bounded provider qualification evidence
+        if: always() && (inputs.qualification_provider == 'claude' || inputs.qualification_provider == 'openai')
+        uses: actions/upload-artifact@v4
+        with:
+          name: module025-provider-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/module025-qualification-evidence/qualification.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Guard exact source, manual Test scope, and no-migration boundary
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        shell: bash
+        env:
+          DISPATCH_CONFIRMATION: ${{ inputs.recover_private_runtime }}
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || fail 'Only protected main activation is allowed.'
+          [[ "$GITHUB_REF" == refs/heads/main ]] || fail 'Only main may be deployed.'
+          [[ "$DISPATCH_CONFIRMATION" == true ]] || fail 'The exact confirmation phrase is required.'
+          [[ "$TARGET_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail 'release_commit must be one exact 40-character commit.'
+          [[ "$TARGET_RELEASE_COMMIT" == "$GITHUB_SHA" ]] || fail 'release_commit must equal the selected main workflow commit.'
+          [[ "$APPROVAL_REFERENCE" =~ ^ORACLE-TEST-[A-Za-z0-9][A-Za-z0-9._-]{7,119}$ ]] || fail 'approval_reference must match ORACLE-TEST-<approved-reference>.'
+          [[ "$(git rev-parse HEAD)" == "$TARGET_RELEASE_COMMIT" ]] || fail 'Checkout does not match the requested release.'
+          git merge-base --is-ancestor "$TARGET_RELEASE_COMMIT" origin/main
+          node tests/validate-celar-ai-oracle-test-runtime.mjs
+          node tests/validate-protected-uat-recovery.mjs
+          node tests/validate-celar-ai-opencloud-deferred-runtime.mjs
+          node src/frontend/project-time-web/scripts/validate-celar-ai-release-scoped-runtime.mjs
+          echo 'MIGRATIONS_APPLIED=NONE'
+          echo 'PRODUCTION_MUTATION=NONE'
+          echo 'OPEN_CLOUD_RUNTIME_MUTATION=NONE'
+          echo 'ORACLE_INFRASTRUCTURE_MUTATION=NONE'
+
+      - name: Prove authenticated Oracle HTTPS services before Azure mutation
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        shell: bash
+        env:
+          RUNTIME_TOKEN: ${{ secrets.PROJECTPULSE_TEST_CELAR_AI_ORACLE_RUNTIME_TOKEN }}
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          [[ ${#RUNTIME_TOKEN} -ge 32 ]] || fail 'PROJECTPULSE_TEST_CELAR_AI_ORACLE_RUNTIME_TOKEN is missing or too short.'
+          mapfile -t RESOLVED < <(getent ahostsv4 "$ORACLE_RUNTIME_HOST" | awk '{print $1}' | sort -u)
+          (( ${#RESOLVED[@]} == 1 )) || fail 'Oracle runtime DNS must resolve to one IPv4 address.'
+          ORACLE_RUNTIME_IP="${RESOLVED[0]}"
+          python3 - "$ORACLE_RUNTIME_IP" <<'PYIP'
+          import ipaddress, sys
+          address = ipaddress.ip_address(sys.argv[1])
+          if address.version != 4 or not address.is_global:
+              raise SystemExit("Oracle hostname must resolve to a public IPv4 address.")
+          PYIP
+          echo "ORACLE_RUNTIME_IP=$ORACLE_RUNTIME_IP" >> "$GITHUB_ENV"
+          echo "ORACLE_RUNTIME_DNS_ADDRESS=$ORACLE_RUNTIME_IP"
+          [[ "$(curl --resolve "$ORACLE_RUNTIME_HOST:443:$ORACLE_RUNTIME_IP" -sS --max-time 30 -o /dev/null -w '%{http_code}' "$ORACLE_READINESS_ENDPOINT")" == 401 ]] || fail 'Unauthenticated readiness must return 401.'
+          WRONG_TOKEN="$(openssl rand -hex 32)"
+          [[ "$(curl --resolve "$ORACLE_RUNTIME_HOST:443:$ORACLE_RUNTIME_IP" -sS --max-time 30 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $WRONG_TOKEN" -H 'X-Pulse-AI-Privacy-Boundary: private_pulse_runtime_only' "$ORACLE_READINESS_ENDPOINT")" == 401 ]] || fail 'Incorrect-token readiness must return 401.'
+          unset WRONG_TOKEN
+          AUTH=(-H "Authorization: Bearer $RUNTIME_TOKEN" -H 'X-Pulse-AI-Privacy-Boundary: private_pulse_runtime_only')
+          curl --resolve "$ORACLE_RUNTIME_HOST:443:$ORACLE_RUNTIME_IP" -fsS --max-time 45 "${AUTH[@]}" "$ORACLE_READINESS_ENDPOINT" > "$RUNNER_TEMP/oracle-health.json"
+          jq -e --arg g "$ORACLE_GENERATION_MODEL" --arg e "$ORACLE_EMBEDDING_MODEL" --arg o "$ORACLE_OCR_MODEL" '
+            .status == "ready" and .ollamaReady == true and .generationModelReady == true and
+            .embeddingModelReady == true and .tesseractReady == true and .clamavReady == true and
+            .generationModel == $g and .embeddingModel == $e and .ocrModel == $o and
+            .rawDocumentContentLogged == false' "$RUNNER_TEMP/oracle-health.json" >/dev/null
+          curl --resolve "$ORACLE_RUNTIME_HOST:443:$ORACLE_RUNTIME_IP" -fsS --max-time 600 "${AUTH[@]}" -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg model "$ORACLE_GENERATION_MODEL" '{model:$model,messages:[{role:"user",content:"Return only: CELAR ORACLE OK"}],stream:false,temperature:0,max_tokens:32}')" \
+            "$ORACLE_INFERENCE_ENDPOINT" | jq -e '.choices[0].message.content | length > 0' >/dev/null
+          EMBEDDING_FILE="$RUNNER_TEMP/oracle-embedding.json"
+          curl --resolve "$ORACLE_RUNTIME_HOST:443:$ORACLE_RUNTIME_IP" -fsS --max-time 180 "${AUTH[@]}" -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg model "$ORACLE_EMBEDDING_MODEL" '{model:$model,input:["Celar AI Test embedding proof"],encoding_format:"float"}')" \
+            "$ORACLE_EMBEDDING_ENDPOINT" > "$EMBEDDING_FILE"
+          python3 - "$EMBEDDING_FILE" <<'PY'
+          import json
+          import math
+          import sys
+
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              payload = json.load(handle)
+
+          def vector(value):
+              if not isinstance(value, list) or not value:
+                  return None
+              if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in value):
+                  return None
+              converted = [float(item) for item in value]
+              return converted if all(math.isfinite(item) for item in converted) else None
+
+          def vectors(value):
+              if isinstance(value, dict):
+                  if isinstance(value.get('data'), list):
+                      ordered = {}
+                      for fallback, item in enumerate(value['data']):
+                          if not isinstance(item, dict):
+                              return []
+                          parsed = vector(item.get('embedding'))
+                          index = item.get('index', fallback)
+                          if parsed is None or isinstance(index, bool) or not isinstance(index, int) or index in ordered:
+                              return []
+                          ordered[index] = parsed
+                      if sorted(ordered) != list(range(len(ordered))):
+                          return []
+                      return [ordered[index] for index in sorted(ordered)]
+                  if 'embeddings' in value:
+                      return vectors(value['embeddings'])
+                  parsed = vector(value.get('embedding'))
+                  return [parsed] if parsed is not None else []
+              if isinstance(value, list):
+                  parsed = vector(value)
+                  if parsed is not None:
+                      return [parsed]
+                  if value and all(isinstance(item, list) for item in value):
+                      result = [vector(item) for item in value]
+                      return result if all(item is not None for item in result) else []
+                  if value and all(isinstance(item, dict) for item in value):
+                      return vectors({'data': value})
+              return []
+
+          result = vectors(payload)
+          if len(result) != 1 or len(result[0]) != 768:
+              raise SystemExit('Oracle embedding response did not contain one finite 768-dimensional vector.')
+          print('ORACLE_EMBEDDING_RESPONSE=VALID')
+          PY
+          CLEAN_FILE="$RUNNER_TEMP/celar-oracle-clean.txt"
+          printf 'Celar AI protected Test clean-file validation.\n' > "$CLEAN_FILE"
+          curl --resolve "$ORACLE_RUNTIME_HOST:443:$ORACLE_RUNTIME_IP" -fsS --max-time 180 "${AUTH[@]}" -F "file=@$CLEAN_FILE;filename=celar-oracle-clean.txt" \
+            "$ORACLE_MALWARE_SCAN_ENDPOINT" | jq -e '.status == "clean" and .clean == true and .scanner == "clamav"' >/dev/null
+          unset RUNTIME_TOKEN
+
+      - name: Snapshot the protected Test API
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        id: recovery_snapshot
+        shell: bash
+        env:
+          UAT_SESSION: ${{ secrets.PROJECTPULSE_TEST_UAT_SESSION }}
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          RESOURCE_GROUP='${{ vars.AZURE_RESOURCE_GROUP }}'
+          API_APP='${{ vars.AZURE_API_APP }}'
+          [[ -n "$RESOURCE_GROUP" && -n "$API_APP" ]] || fail 'Protected Test Container App variables are missing.'
+          [[ "$(az account show --query id -o tsv --only-show-errors)" == '${{ vars.AZURE_SUBSCRIPTION_ID }}' ]] || fail 'Azure login is outside the protected Test subscription.'
+          API_JSON="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" -o json --only-show-errors)"
+          [[ "$(jq -r '.tags.environment // empty' <<<"$API_JSON")" == test ]] || fail 'The target API is not tagged as Test.'
+          [[ "$(jq -r '.properties.configuration.activeRevisionsMode' <<<"$API_JSON" | tr '[:upper:]' '[:lower:]')" == single ]] || fail 'The Test API must use single-revision mode.'
+          [[ -n "$UAT_SESSION" ]] || fail 'PROJECTPULSE_TEST_UAT_SESSION is required.'
+          BASE='${{ vars.PUBLIC_URL }}'; BASE="${BASE%/}"
+          [[ "$BASE" == https://phd-west-test.onenecklab.com ]] || fail 'Unexpected Test origin.'
+          umask 077
+          ADMIN_STATUS="$(curl -sS --max-time 60 -o "$RUNNER_TEMP/oracle-admin-preflight.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $UAT_SESSION" -H "X-ProjectPulse-Session: $UAT_SESSION" \
+            -H 'X-ProjectPulse-Module-Number: 064' -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' \
+            "$BASE/api/ai-configuration/private-model")"
+          ADMIN_CODE="$(jq -r '.status // .code // "unknown" | if type == "string" and test("^[A-Za-z0-9_.-]{1,100}$") then . else "unknown" end' "$RUNNER_TEMP/oracle-admin-preflight.json" 2>/dev/null || echo unknown)"
+          rm -f "$RUNNER_TEMP/oracle-admin-preflight.json"
+          echo "MODULE064_ADMIN_PREFLIGHT_HTTP=$ADMIN_STATUS CODE=$ADMIN_CODE"
+          [[ "$ADMIN_STATUS" == 200 ]] || fail 'The protected UAT session must authorize actual-administrator Module 064 access before runtime recovery.'
+
+          jq '.properties.template.containers[0].env // []' <<<"$API_JSON" > "$RUNNER_TEMP/oracle-before-env.json"
+          jq -r '.properties.template.containers[0].image' <<<"$API_JSON" > "$RUNNER_TEMP/oracle-before-image"
+          echo "resource_group=$RESOURCE_GROUP" >> "$GITHUB_OUTPUT"
+          echo "api_app=$API_APP" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve the currently deployed immutable API image
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        id: recovery_build
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          IMAGE="$(cat "$RUNNER_TEMP/oracle-before-image")"
+          [[ "$IMAGE" == '${{ vars.AZURE_ACR_NAME }}.azurecr.io/'*@sha256:* ]]
+          echo "api_image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Configure the protected token and deploy the Test API revision
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        id: recovery_deploy_api
+        shell: bash
+        env:
+          RUNTIME_TOKEN: ${{ secrets.PROJECTPULSE_TEST_CELAR_AI_ORACLE_RUNTIME_TOKEN }}
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          RESOURCE_GROUP='${{ steps.recovery_snapshot.outputs.resource_group }}'
+          API_APP='${{ steps.recovery_snapshot.outputs.api_app }}'
+          TOKEN_REFERENCE="github-environment://test/celar-ai-oracle-runtime-token@$TARGET_RELEASE_COMMIT"
+          az containerapp secret set -g "$RESOURCE_GROUP" -n "$API_APP" --secrets "$TOKEN_SECRET_NAME=$RUNTIME_TOKEN" --output none --only-show-errors
+          unset RUNTIME_TOKEN
+          az containerapp update -g "$RESOURCE_GROUP" -n "$API_APP" \
+            --image '${{ steps.recovery_build.outputs.api_image }}' \
+            --set-env-vars \
+              PROJECTPULSE_ENVIRONMENT=test \
+              PROJECTPULSE_CELAR_AI_ENABLED=true \
+              PROJECTPULSE_CELAR_AI_DEPLOYMENT_MANAGED=true \
+              PROJECTPULSE_CELAR_AI_TRAINING_ENABLED=false \
+              PROJECTPULSE_PULSE_AI_PRIVATE_RAG_ENABLED=true \
+              PROJECTPULSE_PULSE_AI_PRIVATE_RUNTIME_WORKER_ENABLED=true \
+              PROJECTPULSE_PRIVATE_INFERENCE_REQUIRED_FOR_DOCUMENTS=true \
+              PROJECTPULSE_PULSE_AI_RAG_REQUIRE_PRIVATE_MODEL=true \
+              PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_ENABLED=true \
+              PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_HOST="$ORACLE_RUNTIME_HOST" \
+              PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_EXPECTED_IP="$ORACLE_RUNTIME_IP" \
+              PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_ADDRESS_MODE=dns \
+              PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_APPROVAL_REFERENCE="$APPROVAL_REFERENCE" \
+              PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_READINESS_ENDPOINT="$ORACLE_READINESS_ENDPOINT" \
+              PROJECTPULSE_PRIVATE_INFERENCE_ENDPOINT="$ORACLE_INFERENCE_ENDPOINT" \
+              PROJECTPULSE_PRIVATE_INFERENCE_MODEL="$ORACLE_GENERATION_MODEL" \
+              PROJECTPULSE_PRIVATE_INFERENCE_AUTH_MODE=bearer \
+              PROJECTPULSE_PRIVATE_INFERENCE_BEARER_TOKEN="secretref:$TOKEN_SECRET_NAME" \
+              PROJECTPULSE_PRIVATE_INFERENCE_BEARER_TOKEN_SECRET_REFERENCE="$TOKEN_REFERENCE" \
+              PROJECTPULSE_PRIVATE_EMBEDDING_ENDPOINT="$ORACLE_EMBEDDING_ENDPOINT" \
+              PROJECTPULSE_PRIVATE_EMBEDDING_MODEL="$ORACLE_EMBEDDING_MODEL" \
+              PROJECTPULSE_PRIVATE_EMBEDDING_BEARER_TOKEN="secretref:$TOKEN_SECRET_NAME" \
+              PROJECTPULSE_PRIVATE_EMBEDDING_BEARER_TOKEN_SECRET_REFERENCE="$TOKEN_REFERENCE" \
+              PROJECTPULSE_PRIVATE_OCR_ENDPOINT="$ORACLE_OCR_ENDPOINT" \
+              PROJECTPULSE_PRIVATE_OCR_MODEL="$ORACLE_OCR_MODEL" \
+              PROJECTPULSE_PRIVATE_OCR_BEARER_TOKEN="secretref:$TOKEN_SECRET_NAME" \
+              PROJECTPULSE_PRIVATE_OCR_BEARER_TOKEN_SECRET_REFERENCE="$TOKEN_REFERENCE" \
+              PROJECTPULSE_PRIVATE_MALWARE_SCAN_ENDPOINT="$ORACLE_MALWARE_SCAN_ENDPOINT" \
+              PROJECTPULSE_PRIVATE_MALWARE_SCAN_BEARER_TOKEN="secretref:$TOKEN_SECRET_NAME" \
+              PROJECTPULSE_PRIVATE_MALWARE_SCAN_BEARER_TOKEN_SECRET_REFERENCE="$TOKEN_REFERENCE" \
+              PROJECTPULSE_PRIVATE_ENDPOINT_HOST_ALLOWLIST="$ORACLE_RUNTIME_HOST" \
+              PROJECTPULSE_PRIVATE_VECTOR_INDEX=projectpulse_postgresql_hybrid \
+              PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SCANNER_MODE=celar_https_gateway \
+              PROJECTPULSE_PULSE_AI_CLAMAV_TIMEOUT_SECONDS=45 \
+              PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SCAN_ATTESTED=true \
+              PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SIGNATURE_VERSION="$(jq -er ' .clamavSignatureVersion | select(type == "string" and length > 0)' "$RUNNER_TEMP/oracle-health.json")" \
+              PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SCAN_APPROVAL_REFERENCE="$APPROVAL_REFERENCE" \
+              PROJECTPULSE_PULSE_AI_DOCUMENT_EXTRACTION_PREVIEW_ENABLED=true \
+            --remove-env-vars PROJECTPULSE_CELAR_AI_TRAINING_ENDPOINT PROJECTPULSE_CELAR_AI_TRAINING_HOST_ALLOWLIST PROJECTPULSE_CELAR_AI_TRAINING_BEARER_TOKEN PROJECTPULSE_PULSE_AI_CLAMAV_HOST PROJECTPULSE_PULSE_AI_CLAMAV_PORT \
+            --revision-suffix "caor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output none --only-show-errors
+          REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh "$RESOURCE_GROUP" "$API_APP" "$REVISION" '${{ steps.recovery_build.outputs.api_image }}' 60 10
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+
+      - name: Snapshot protected Test and preserve rollback contract
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+
+          resolve_digest() {
+            local image="$1" registry='${{ vars.AZURE_ACR_NAME }}.azurecr.io/' relative repository digest
+            case "$image" in
+              "$registry"*@sha256:*) printf '%s\n' "$image"; return ;;
+              "$registry"*:*) ;;
+              *) fail "Rollback image is outside the approved Test ACR: $image" ;;
+            esac
+            relative="${image#"$registry"}"
+            repository="${relative%:*}"
+            digest="$(az acr repository show --name '${{ vars.AZURE_ACR_NAME }}' --image "$relative" --query digest -o tsv --only-show-errors)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Could not resolve an immutable digest for $image."
+            printf '%s%s@%s\n' "$registry" "$repository" "$digest"
+          }
+
+          CURRENT_SUBSCRIPTION="$(az account show --query id -o tsv --only-show-errors)"
+          [[ "${CURRENT_SUBSCRIPTION,,}" == "${{ vars.AZURE_SUBSCRIPTION_ID }}" ]] || fail 'Azure login is outside the protected Test subscription.'
+
+          API_JSON="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' -o json --only-show-errors)"
+          WEB_JSON="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' -o json --only-show-errors)"
+          [[ "$(jq -r '.tags.environment // empty' <<<"$API_JSON")" == test ]] || fail 'API is not tagged Test.'
+          [[ "$(jq -r '.tags.environment // empty' <<<"$WEB_JSON")" == test ]] || fail 'Web app is not tagged Test.'
+          [[ "$(jq -r '.properties.configuration.activeRevisionsMode' <<<"$API_JSON" | tr '[:upper:]' '[:lower:]')" == single ]] || fail 'API must use single-revision mode.'
+          [[ "$(jq -r '.properties.configuration.activeRevisionsMode' <<<"$WEB_JSON" | tr '[:upper:]' '[:lower:]')" == single ]] || fail 'Web app must use single-revision mode.'
+
+          BASE='${{ vars.PUBLIC_URL }}'
+          BASE="${BASE%/}"
+          [[ "$BASE" == https://phd-west-test.onenecklab.com ]] || fail 'Configured public origin is not protected Test.'
+
+          HEALTH_STATUS="$(curl -sS --max-time 60 -o "$EVIDENCE_DIR/preflight-health.json" -w '%{http_code}' -H 'Cache-Control: no-cache' "$BASE/health?preflight=$GITHUB_RUN_ID" || true)"
+          [[ "$HEALTH_STATUS" == 200 ]] || fail "Protected Test health returned HTTP $HEALTH_STATUS before deployment."
+          jq -e '.status == "healthy"' "$EVIDENCE_DIR/preflight-health.json" >/dev/null || fail 'Protected Test was not healthy before deployment.'
+
+          OLD_SOURCE="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_SOURCE_COMMIT") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$API_JSON")"
+          [[ "$OLD_SOURCE" =~ ^[0-9a-f]{40}$ ]] || fail 'Existing Test source marker is missing or invalid.'
+
+          jq '
+            def canonical_private_environment_entry:
+              if ((.secretRef // "") | length) > 0 then
+                if ((.value // "") | length) > 0 then error("Secret-backed private runtime variable also contains a literal value.")
+                else {name, secretRef} end
+              else {name, value: (.value // "")} end;
+            {
+              privateEnvironment: [
+                .properties.template.containers[0].env[]?
+                | select(.name | test("^(PROJECTPULSE_(PRIVATE_|PULSE_AI_PRIVATE_|PULSE_AI_DOCUMENT_|PULSE_AI_CLAMAV|CELAR_AI_|UPLOAD_ROOT)|PROJECT_PULSE_UPLOAD_ROOT|CELAR_AI_)"))
+                | canonical_private_environment_entry
+              ] | sort_by(.name),
+              volumes: (.properties.template.volumes // []),
+              volumeMounts: (.properties.template.containers[0].volumeMounts // [])
+            }
+          ' <<<"$API_JSON" > "$EVIDENCE_DIR/runtime-contract-before.json"
+
+          OLD_API_IMAGE="$(resolve_digest "$(jq -r '.properties.template.containers[0].image' <<<"$API_JSON")")"
+          OLD_WEB_IMAGE="$(resolve_digest "$(jq -r '.properties.template.containers[0].image' <<<"$WEB_JSON")")"
+          {
+            echo "base=$BASE"
+            echo "old_source=$OLD_SOURCE"
+            echo "old_api_image=$OLD_API_IMAGE"
+            echo "old_web_image=$OLD_WEB_IMAGE"
+          } >> "$GITHUB_OUTPUT"
+
+          jq -n --arg base "$BASE" --arg oldSource "$OLD_SOURCE" --arg oldApiImage "$OLD_API_IMAGE" --arg oldWebImage "$OLD_WEB_IMAGE" '{base:$base,oldSource:$oldSource,oldApiImage:$oldApiImage,oldWebImage:$oldWebImage,preDeploymentHealthValidated:true,runtimeContractCaptured:true}' > "$EVIDENCE_DIR/test-contract.json"
+
+      - name: Verify the matching Oracle SOW runtime before API rollout
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        shell: bash
+        working-directory: release
+        env:
+          RUNTIME_TOKEN: ${{ secrets.PROJECTPULSE_TEST_CELAR_AI_ORACLE_RUNTIME_TOKEN }}
+        run: python3 scripts/release-test/verify-oracle-sow-runtime.py
+
+      - name: Build immutable API, web, and migration images
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: build
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          ACR='${{ vars.AZURE_ACR_NAME }}'
+          SHORT_RELEASE="${TARGET_RELEASE_COMMIT:0:12}"
+          UNIQUE_TAG="rel-${SHORT_RELEASE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          RELEASE_ROOT="$(pwd -P)"
+          BUILD_LOG="$EVIDENCE_DIR/image-build.log"
+
+          install -d -m 0700 "$EVIDENCE_DIR"
+          : > "$BUILD_LOG"
+          [[ -n "$ACR" && "$ACR" =~ ^[A-Za-z0-9]+$ ]] || fail 'AZURE_ACR_NAME is missing or invalid.'
+          for tool in az docker realpath tee; do
+            command -v "$tool" >/dev/null 2>&1 || fail "Required image-build tool is unavailable: $tool"
+          done
+          for required in \
+            deployment/containers/api/Dockerfile \
+            deployment/containers/web/Dockerfile; do
+            [[ -f "$required" ]] || fail "Image-build Dockerfile is missing: $required"
+          done
+          {
+            echo "IMAGE_BUILD_RELEASE_ROOT=$RELEASE_ROOT"
+            echo "IMAGE_BUILD_ACR=$ACR"
+            echo "IMAGE_BUILD_UNIQUE_TAG=$UNIQUE_TAG"
+          } | tee -a "$BUILD_LOG" >&2
+
+          resolve_digest() {
+            local image="$1" digest='' attempt
+            for attempt in $(seq 1 12); do
+              digest="$(az acr repository show --name "$ACR" --image "$image" --query digest -o tsv --only-show-errors 2>/dev/null || true)"
+              if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then printf '%s\n' "$digest"; return 0; fi
+              (( attempt < 12 )) && sleep 5
+            done
+            return 1
+          }
+
+          build_image() {
+            local repository="$1" dockerfile="$2" context="$3"
+            local image="${repository}:${UNIQUE_TAG}"
+            local digest='' attempt dockerfile_abs context_abs dockerfile_for_acr full_image
+
+            dockerfile_abs="$(realpath "$dockerfile")" || fail "Could not resolve Dockerfile path: $dockerfile"
+            context_abs="$(realpath "$context")" || fail "Could not resolve build context: $context"
+            [[ -f "$dockerfile_abs" ]] || fail "Dockerfile is not a file: $dockerfile_abs"
+            [[ -d "$context_abs" ]] || fail "Build context is not a directory: $context_abs"
+            case "$dockerfile_abs" in
+              "$context_abs"/*) dockerfile_for_acr="${dockerfile_abs#"$context_abs"/}" ;;
+              *) fail "Dockerfile must be contained by its ACR build context: $dockerfile_abs outside $context_abs" ;;
+            esac
+
+            {
+              echo "IMAGE_BUILD_REPOSITORY=$repository"
+              echo "IMAGE_BUILD_CONTEXT=$context_abs"
+              echo "IMAGE_BUILD_DOCKERFILE=$dockerfile_for_acr"
+            } | tee -a "$BUILD_LOG" >&2
+
+            for attempt in 1 2; do
+              echo "ACR_BUILD_ATTEMPT=$attempt IMAGE=$image" | tee -a "$BUILD_LOG" >&2
+              if az acr build \
+                --registry "$ACR" \
+                --image "$image" \
+                --file "$dockerfile_for_acr" \
+                --timeout 3600 \
+                "$context_abs" 2>&1 | tee -a "$BUILD_LOG" >&2; then
+                digest="$(resolve_digest "$image" || true)"
+                if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                  printf '%s\n' "$digest"
+                  return 0
+                fi
+                echo "ACR_BUILD_DIGEST_UNAVAILABLE IMAGE=$image ATTEMPT=$attempt" | tee -a "$BUILD_LOG" >&2
+              fi
+              (( attempt < 2 )) && sleep $((attempt * 20))
+            done
+
+            echo "ACR cloud build failed twice; using authenticated local Docker fallback for $image." | tee -a "$BUILD_LOG" >&2
+            az acr login --name "$ACR" --only-show-errors 2>&1 | tee -a "$BUILD_LOG" >&2
+            full_image="$ACR.azurecr.io/$image"
+            docker build --file "$dockerfile_abs" --tag "$full_image" "$context_abs" 2>&1 | tee -a "$BUILD_LOG" >&2
+            docker push "$full_image" 2>&1 | tee -a "$BUILD_LOG" >&2
+            digest="$(resolve_digest "$image" || true)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "Fallback build did not publish an immutable digest for $image."
+            printf '%s\n' "$digest"
+          }
+
+          MIGRATION_CONTEXT="$RUNNER_TEMP/reliability-migrator-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          install -d -m 0700 "$MIGRATION_CONTEXT/database/migrations"
+          install -m 0644 database/migrations/086_module_066_flowhive_enterprise_pm.sql "$MIGRATION_CONTEXT/database/migrations/086_module_066_flowhive_enterprise_pm.sql"
+          install -m 0644 database/migrations/088_systemwide_enterprise_reliability.sql "$MIGRATION_CONTEXT/database/migrations/088_systemwide_enterprise_reliability.sql"
+          install -m 0644 database/migrations/093_assigned_work_canonical_visibility_repair.sql "$MIGRATION_CONTEXT/database/migrations/093_assigned_work_canonical_visibility_repair.sql"
+          install -m 0644 database/migrations/112_optional_ai_providers.sql "$MIGRATION_CONTEXT/database/migrations/112_optional_ai_providers.sql"
+          install -m 0644 database/migrations/113_module065_teams_notifications.sql "$MIGRATION_CONTEXT/database/migrations/113_module065_teams_notifications.sql"
+          install -m 0644 database/migrations/114_module064_private_admin_override.sql "$MIGRATION_CONTEXT/database/migrations/114_module064_private_admin_override.sql"
+          printf '%s\n' "$TARGET_RELEASE_COMMIT" > "$MIGRATION_CONTEXT/release-commit"
+          cat > "$MIGRATION_CONTEXT/entrypoint.sh" <<'ENTRYPOINT'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          ROOT=/opt/projectpulse/release
+          EXPECTED="${MAIN_RELEASE_EXPECTED_RELEASE_COMMIT:-}"
+          ACTUAL="$(cat "$ROOT/.projectpulse-release-commit")"
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$ACTUAL" == "$EXPECTED" ]] || {
+            echo 'ERROR: Migration image release identity mismatch.' >&2
+            exit 1
+          }
+          for migration in \
+            "$ROOT/database/migrations/086_module_066_flowhive_enterprise_pm.sql" \
+            "$ROOT/database/migrations/088_systemwide_enterprise_reliability.sql" \
+            "$ROOT/database/migrations/093_assigned_work_canonical_visibility_repair.sql" \
+            "$ROOT/database/migrations/112_optional_ai_providers.sql" \
+            "$ROOT/database/migrations/113_module065_teams_notifications.sql" \
+            "$ROOT/database/migrations/114_module064_private_admin_override.sql"; do
+            [[ -f "$migration" ]] || { echo "ERROR: Missing migration $migration" >&2; exit 1; }
+            psql -X -v ON_ERROR_STOP=1 --file "$migration"
+          done
+          verification="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT
+            EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='086_module_066_flowhive_enterprise_pm')::text || '|' ||
+            EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='088_systemwide_enterprise_reliability')::text || '|' ||
+            EXISTS(SELECT 1 FROM schema_migrations WHERE migration_id='093_assigned_work_canonical_visibility_repair')::text || '|' ||
+            (to_regclass('public.project_flowhive_working_copies') IS NOT NULL)::text || '|' ||
+            (to_regclass('public.project_flowhive_project_controls') IS NOT NULL)::text || '|' ||
+            (to_regclass('public.project_flowhive_raid_items') IS NOT NULL)::text || '|' ||
+            (to_regclass('public.project_flowhive_status_reports') IS NOT NULL)::text || '|' ||
+            (to_regclass('public.project_flowhive_customer_shares') IS NOT NULL)::text || '|' ||
+            EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='projects' AND column_name='account_executive_user_id')::text || '|' ||
+            EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='project_intake_requests' AND column_name='solution_architect_user_id')::text || '|' ||
+            (to_regprocedure('public.projectpulse093_resolve_project_task_id(uuid,text)') IS NOT NULL)::text || '|' ||
+            EXISTS(
+              SELECT 1
+              FROM pg_trigger trigger_record
+              WHERE trigger_record.tgrelid = 'public.work_register_task_assignment_history'::regclass
+                AND trigger_record.tgname = 'trg_projectpulse093_sync_work_register_assignment'
+                AND NOT trigger_record.tgisinternal
+            )::text || '|' ||
+            (NOT EXISTS (
+              SELECT 1
+              FROM work_register_task_assignment_history history
+              JOIN project_tasks task
+                ON task.project_id = history.project_id
+               AND task.task_id = projectpulse093_resolve_project_task_id(history.project_id, history.task_id_text)
+               AND task.is_active = TRUE
+              JOIN projects project
+                ON project.project_id = history.project_id
+              WHERE history.assigned_user_id IS NOT NULL
+                AND lower(btrim(COALESCE(history.assignment_status, ''))) = 'active'
+                AND (history.effective_end_date IS NULL OR history.effective_end_date >= CURRENT_DATE)
+                AND lower(btrim(COALESCE(project.status, 'active'))) NOT IN (
+                  'closed','complete','completed','done','cancelled','canceled','archived'
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM project_assignments assignment
+                  WHERE assignment.project_id = history.project_id
+                    AND assignment.task_id = task.task_id
+                    AND assignment.user_id = history.assigned_user_id
+                    AND assignment.effective_start_date <= CURRENT_DATE
+                    AND (assignment.effective_end_date IS NULL OR assignment.effective_end_date >= CURRENT_DATE)
+                )
+            ))::text;
+          SQL
+          )"
+          [[ "$verification" == 'true|true|true|true|true|true|true|true|true|true|true|true|true' ]] || {
+            echo "ERROR: Migration verification failed: $verification" >&2
+            exit 1
+          }
+          echo 'MIGRATION_086=APPLIED_AND_VERIFIED'
+          echo 'MIGRATION_088=APPLIED_AND_VERIFIED'
+          echo 'MIGRATION_093=APPLIED_AND_VERIFIED'
+          enterprise_verified="$(psql -X -At -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT (
+            (SELECT count(*) FROM schema_migrations WHERE migration_id IN ('112_optional_ai_providers','113_module065_teams_notifications','114_module064_private_admin_override')) = 3
+            AND to_regclass('public.module065_teams_configuration') IS NOT NULL
+            AND to_regclass('public.module065_teams_delivery') IS NOT NULL
+            AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='ai_private_model_profiles' AND column_name='administrator_override')
+          )::text;
+          SQL
+          )"
+          [[ "$enterprise_verified" == true ]] || { echo 'ERROR: Enterprise integration migrations failed verification.' >&2; exit 1; }
+          echo 'MIGRATIONS_112_113_114=APPLIED_AND_VERIFIED'
+
+          ENTRYPOINT
+          chmod 0555 "$MIGRATION_CONTEXT/entrypoint.sh"
+
+          cat > "$MIGRATION_CONTEXT/Dockerfile" <<'DOCKERFILE'
+          FROM postgres:16-alpine
+          RUN apk add --no-cache bash coreutils ca-certificates
+          WORKDIR /opt/projectpulse/release
+          COPY release-commit .projectpulse-release-commit
+          COPY database/ database/
+          COPY entrypoint.sh /usr/local/bin/systemwide-reliability-migrate
+          RUN chmod 0555 /usr/local/bin/systemwide-reliability-migrate \
+              && chmod 0444 .projectpulse-release-commit database/migrations/*.sql
+          ENTRYPOINT ["/usr/local/bin/systemwide-reliability-migrate"]
+          DOCKERFILE
+
+          API_DIGEST="$(build_image project-health-dashboard-api deployment/containers/api/Dockerfile .)"
+          WEB_DIGEST="$(build_image project-health-dashboard-web deployment/containers/web/Dockerfile .)"
+          MIGRATION_DIGEST="$(build_image project-health-dashboard-reliability-migrator "$MIGRATION_CONTEXT/Dockerfile" "$MIGRATION_CONTEXT")"
+          API_IMAGE="$ACR.azurecr.io/project-health-dashboard-api@$API_DIGEST"
+          WEB_IMAGE="$ACR.azurecr.io/project-health-dashboard-web@$WEB_DIGEST"
+          MIGRATION_IMAGE="$ACR.azurecr.io/project-health-dashboard-reliability-migrator@$MIGRATION_DIGEST"
+          {
+            echo "api_image=$API_IMAGE"
+            echo "web_image=$WEB_IMAGE"
+            echo "migration_image=$MIGRATION_IMAGE"
+          } >> "$GITHUB_OUTPUT"
+          jq -n --arg api "$API_IMAGE" --arg web "$WEB_IMAGE" --arg migration "$MIGRATION_IMAGE" '{apiImage:$api,webImage:$web,migrationImage:$migration}' > "$EVIDENCE_DIR/immutable-images.json"
+
+      # Compatibility contract: Apply and verify governed system-wide migrations plus Module 025 project-name migration 109 inside Test private network.
+      - name: Apply and verify governed migrations through Module 025 project-name migration 109 inside Test private network
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: migration
+        shell: bash
+        working-directory: release
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+          RELIABILITY_MIGRATION_IMAGE: ${{ steps.build.outputs.migration_image }}
+          RELIABILITY_MIGRATION_JOB_NAME: rel-${{ github.run_id }}-${{ github.run_attempt }}
+          AZURE_CELAR_MIGRATOR_IDENTITY_RESOURCE_ID: ${{ vars.AZURE_CELAR_MIGRATOR_IDENTITY_RESOURCE_ID }}
+          AZURE_KEY_VAULT_URI: ${{ vars.AZURE_KEY_VAULT_URI }}
+          PROJECTPULSE_DATABASE_PASSWORD_SECRET_NAME: ${{ vars.PROJECTPULSE_DATABASE_PASSWORD_SECRET_NAME }}
+          PROJECTPULSE_TEST_DATABASE_HOST: ${{ vars.PROJECTPULSE_TEST_DATABASE_HOST }}
+          PROJECTPULSE_TEST_DATABASE_PORT: ${{ vars.PROJECTPULSE_TEST_DATABASE_PORT }}
+          PROJECTPULSE_TEST_DATABASE_NAME: ${{ vars.PROJECTPULSE_TEST_DATABASE_NAME }}
+          PROJECTPULSE_TEST_DATABASE_USER: ${{ vars.PROJECTPULSE_TEST_DATABASE_USER }}
+          RELIABILITY_CONTROL_SHA: ${{ github.sha }}
+          RELIABILITY_RELEASE_COMMIT: ${{ env.TARGET_RELEASE_COMMIT }}
+          RELIABILITY_MIGRATION_SCOPE: systemwide-enterprise-reliability-test
+        run: |
+          set -Eeuo pipefail
+          bash scripts/release-test/run-systemwide-enterprise-reliability-migrations-job.sh
+          if [[ "$ACCEPTANCE_SCOPE" == sow_role || "$ACCEPTANCE_SCOPE" == sow_exports ]]; then
+            bash scripts/release-test/build-and-run-module025-retention-migration-106.sh
+          fi
+          if [[ "$TARGET_RELEASE_BRANCH" == 'release/flowhive-sow-successor-20260908' ]]; then
+            [[ "$GITHUB_REF" == 'refs/heads/main' ]] || exit 1
+            PROJECTPULSE_RELEASE_ROOT="$PWD" bash "$GITHUB_WORKSPACE/control/scripts/release-test/build-and-run-flowhive-psa-migrations.sh"
+          fi
+          echo 'applied_and_verified=true' >> "$GITHUB_OUTPUT"
+          jq -n --arg image '${{ steps.build.outputs.migration_image }}' '{status:"applied_and_verified",migrations:["086_module_066_flowhive_enterprise_pm","088_systemwide_enterprise_reliability","093_assigned_work_canonical_visibility_repair","094_flowhive_canonical_sow_authority","095_project_planning_collaboration_access","096_project_planning_document_authority","097_project_planning_identity_safe_admission","098_module_management_owner_storage_reconciliation","098_customer_directory_source_authority","099_module025_sow_gsd_workspace","100_module001b_catalog_ownership_reconciliation","109_module025_project_name","115_module_066_task_notifications","121_flowhive_sequential_phase_checkpoints","122_flowhive_automatic_first_draft","123_module064_external_generation_approval","124_module025_service_scope","125_automatic_document_admission_laya","127_flowhive_pm_automatic_planning_defaults"],image:$image,productionMutation:false}' > "$EVIDENCE_DIR/migrations.json"
+
+      - name: Deploy immutable Test API image
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: deploy_api
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' \
+            --image '${{ steps.build.outputs.api_image }}' \
+            --set-env-vars PROJECTPULSE_SOURCE_COMMIT="$TARGET_RELEASE_COMMIT" PROJECTPULSE_CELAR_AI_CURRENT_PUBLIC_FACTS_ENABLED=true \
+            --revision-suffix "rela-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output none --only-show-errors
+          REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh '${{ vars.AZURE_RESOURCE_GROUP }}' '${{ vars.AZURE_API_APP }}' "$REVISION" '${{ steps.build.outputs.api_image }}' 60 10
+
+          AFTER_JSON="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' -o json --only-show-errors)"
+          SOURCE_AFTER="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_SOURCE_COMMIT") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$AFTER_JSON")"
+          [[ "$SOURCE_AFTER" == "$TARGET_RELEASE_COMMIT" ]]
+          jq '
+            def canonical_private_environment_entry:
+              if ((.secretRef // "") | length) > 0 then
+                if ((.value // "") | length) > 0 then error("Secret-backed private runtime variable also contains a literal value.")
+                else {name, secretRef} end
+              else {name, value: (.value // "")} end;
+            {
+              privateEnvironment: [
+                .properties.template.containers[0].env[]?
+                | select(.name | test("^(PROJECTPULSE_(PRIVATE_|PULSE_AI_PRIVATE_|PULSE_AI_DOCUMENT_|PULSE_AI_CLAMAV|CELAR_AI_|UPLOAD_ROOT)|PROJECT_PULSE_UPLOAD_ROOT|CELAR_AI_)"))
+                | canonical_private_environment_entry
+              ] | sort_by(.name),
+              volumes: (.properties.template.volumes // []),
+              volumeMounts: (.properties.template.containers[0].volumeMounts // [])
+            }
+          ' <<<"$AFTER_JSON" > "$EVIDENCE_DIR/runtime-contract-after.json"
+          diff -u "$EVIDENCE_DIR/runtime-contract-before.json" "$EVIDENCE_DIR/runtime-contract-after.json"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+
+      - name: Prove Pulse-to-Oracle inference and runtime readiness
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        id: recovery_verify
+        shell: bash
+        env:
+          UAT_SESSION: ${{ secrets.PROJECTPULSE_TEST_UAT_SESSION }}
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          BASE='${{ vars.PUBLIC_URL }}'; BASE="${BASE%/}"
+          [[ "$BASE" == https://phd-west-test.onenecklab.com ]]
+          AUTH=(-H "Authorization: Bearer $UAT_SESSION" -H "X-ProjectPulse-Session: $UAT_SESSION" -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' -H 'Cache-Control: no-cache')
+          AVAILABLE=false
+          mkdir -p "$EVIDENCE_DIR"
+          for _attempt in $(seq 1 3); do
+            PROBE_HTTP="$(curl -sS --max-time 180 "${AUTH[@]}" -H 'X-ProjectPulse-Module-Number: 064' \
+              -H 'Content-Type: application/json' -d '{}' -o "$RUNNER_TEMP/oracle-admin-probe.json" -w '%{http_code}' \
+              "$BASE/api/ai-configuration/private-model/test" || true)"
+            jq --arg http "$PROBE_HTTP" '{httpStatus:$http, status:(.status // "unknown"), diagnosticCode:(.diagnosticCode // .code // "unknown"), configured:(.configured == true), available:(.available == true), model:(.model // null)}' \
+              "$RUNNER_TEMP/oracle-admin-probe.json" > "$EVIDENCE_DIR/module064-private-runtime-probe.json" 2>/dev/null || true
+            if [[ "$PROBE_HTTP" == 200 ]] && jq -e '.status == "private_model_available" and .configured == true and .available == true' "$RUNNER_TEMP/oracle-admin-probe.json" >/dev/null 2>&1; then AVAILABLE=true; break; fi
+            [[ "$PROBE_HTTP" != 401 && "$PROBE_HTTP" != 403 ]] || break
+            sleep 10
+          done
+          rm -f "$RUNNER_TEMP/oracle-admin-probe.json"
+          [[ "$AVAILABLE" == true ]] || { echo 'ERROR: Module 064 private runtime verification failed; see sanitized probe evidence.' >&2; exit 1; }
+          PIPELINE="$(curl -fsS --max-time 90 "${AUTH[@]}" -H 'X-ProjectPulse-Module-Number: 011' "$BASE/api/celar-ai/v1/documents/pipeline/readiness")"
+          jq -e '.readiness.malwareScanAttested == true and .readiness.malwareScannerMode == "celar_https_gateway" and .readiness.ocrEndpointConfigured == true and .readiness.privateEmbeddingEndpointConfigured == true and .readiness.privateVectorIndexConfigured == true' <<<"$PIPELINE" >/dev/null
+          RUNTIME="$(curl -fsS --max-time 90 "${AUTH[@]}" -H 'X-ProjectPulse-Module-Number: 011' "$BASE/api/celar-ai/v1/documents/runtime/readiness")"
+          jq -e '.readiness.clamAvConfigured == true and .readiness.malwareScannerEndpointPrivate == true and .readiness.ocrConfigured == true and .readiness.ocrEndpointPrivate == true and .readiness.embeddingConfigured == true and .readiness.embeddingEndpointPrivate == true' <<<"$RUNTIME" >/dev/null
+
+      - name: Publish sanitized deployment evidence
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (success() && github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          mkdir -p evidence
+          jq -n --slurpfile migrationEvidence "$EVIDENCE_DIR/migrations.json" --arg environment test --arg releaseCommit "$TARGET_RELEASE_COMMIT" --arg approvalReference "$APPROVAL_REFERENCE" --arg apiImage '${{ steps.build.outputs.api_image }}' --arg apiRevision '${{ steps.deploy_api.outputs.revision }}' \
+            '{environment:$environment,releaseCommit:$releaseCommit,approvalReference:$approvalReference,migrations:$migrationEvidence[0].migrations,productionMutation:false,openCloudMutation:false,oracleInfrastructureMutation:false,apiImage:$apiImage,apiRevision:$apiRevision,secretMaterialRecorded:false}' \
+            > evidence/celar-ai-oracle-test-runtime.json
+
+      - name: Upload sanitized deployment evidence
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (success() && github.ref == 'refs/heads/main' && inputs.recover_private_runtime == true) }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: celar-ai-oracle-test-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release/evidence/celar-ai-oracle-test-runtime.json
+          retention-days: 30
+
+      - name: Deploy immutable Test web image
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: deploy_web
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' \
+            --image '${{ steps.build.outputs.web_image }}' \
+            --revision-suffix "relw-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output none --only-show-errors
+          REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh '${{ vars.AZURE_RESOURCE_GROUP }}' '${{ vars.AZURE_WEB_APP }}' "$REVISION" '${{ steps.build.outputs.web_image }}' 60 10
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+
+      - name: Seal server-confirmed deployment identity
+        if: (inputs.qualification_provider == '' || inputs.qualification_provider == 'none')
+        id: deployment_identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -d -m 0700 "$EVIDENCE_DIR"
+          jq -n \
+            --arg environment test \
+            --arg applicationSha "$TARGET_RELEASE_COMMIT" \
+            --arg applicationBranch "$TARGET_RELEASE_BRANCH" \
+            --arg deploymentRunId "$GITHUB_RUN_ID" \
+            --arg deploymentAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg controllerSha "$GITHUB_SHA" \
+            --arg apiRevision '${{ steps.deploy_api.outputs.revision }}' \
+            --arg webRevision '${{ steps.deploy_web.outputs.revision }}' \
+            --arg apiImage '${{ steps.build.outputs.api_image }}' \
+            --arg webImage '${{ steps.build.outputs.web_image }}' \
+            '{status:"identity_inputs_sealed",environment:$environment,applicationSha:$applicationSha,applicationBranch:$applicationBranch,deploymentRunId:$deploymentRunId,deploymentAttempt:$deploymentAttempt,controllerSha:$controllerSha,apiRevision:$apiRevision,webRevision:$webRevision,apiImage:$apiImage,webImage:$webImage,productionMutation:false}' \
+            > "$EVIDENCE_DIR/deployment-identity.json"
+          test "$(jq -r '.applicationSha' "$EVIDENCE_DIR/deployment-identity.json")" = "$TARGET_RELEASE_COMMIT"
+          test "$(jq -r '.controllerSha' "$EVIDENCE_DIR/deployment-identity.json")" = "$GITHUB_SHA"
+          jq -e '.apiImage | test("@sha256:[0-9a-f]{64}$")' "$EVIDENCE_DIR/deployment-identity.json" >/dev/null
+          jq -e '.webImage | test("@sha256:[0-9a-f]{64}$")' "$EVIDENCE_DIR/deployment-identity.json" >/dev/null
+
+      - name: Verify PSA candidate health and the live SOW-to-WBS lifecycle
+        id: psa_live_uat
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (steps.psa_admission.outputs.authorized == 'true') }}
+        timeout-minutes: 20
+        shell: bash
+        working-directory: control
+        env:
+          PSA_RELEASE_AUTHORIZED: ${{ steps.psa_admission.outputs.authorized }}
+          PROJECTPULSE_M025_PM_EMAIL: ${{ secrets.PROJECTPULSE_M025_PM_EMAIL }}
+          PROJECTPULSE_M025_PM_PASSWORD: ${{ secrets.PROJECTPULSE_M025_PM_PASSWORD }}
+          PREVIOUS_PLANNER_RUN_ID: 171e4430-95e4-4f80-be14-454dcc319ef2
+          BASE: ${{ steps.contract.outputs.base }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_WEB_APP: ${{ vars.AZURE_WEB_APP }}
+          EXPECTED_API_IMAGE: ${{ steps.build.outputs.api_image }}
+          EXPECTED_WEB_IMAGE: ${{ steps.build.outputs.web_image }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PSA_RELEASE_AUTHORIZED" == true && "$BASE" == 'https://phd-west-test.onenecklab.com' ]]
+          API_JSON="$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" -o json --only-show-errors)"
+          WEB_JSON="$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEB_APP" -o json --only-show-errors)"
+          jq -e --arg image "$EXPECTED_API_IMAGE" --arg source "$TARGET_RELEASE_COMMIT" '
+            .tags.environment == "test" and .properties.template.containers[0].image == $image
+            and ([.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_SOURCE_COMMIT") | .value] == [$source])
+          ' <<<"$API_JSON" >/dev/null
+          jq -e --arg image "$EXPECTED_WEB_IMAGE" '.tags.environment == "test" and .properties.template.containers[0].image == $image' <<<"$WEB_JSON" >/dev/null
+          unset API_JSON WEB_JSON
+          ready=false
+          for attempt in $(seq 1 18); do
+            if curl -fsS --max-time 15 --proto '=https' -H 'Cache-Control: no-cache' "$BASE/health" | jq -e '.status == "healthy"' >/dev/null; then ready=true; break; fi
+            sleep 5
+          done
+          [[ "$ready" == true ]]
+          echo 'deployment_health_verified=true' >> "$GITHUB_OUTPUT"
+          jq -n --arg source "$TARGET_RELEASE_COMMIT" '{deploymentHealthVerified:true,sourceCommit:$source,productionMutation:false}' > "$EVIDENCE_DIR/deployment-health-verified.json"
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-flowhive-psa-live-uat.py
+
+      - name: Verify Module 025 scoped deployment identity and lifecycle
+        id: sow_role_uat
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && ((inputs.acceptance_scope == 'sow_role' || inputs.acceptance_scope == 'sow_exports')) }}
+        timeout-minutes: 50
+        shell: bash
+        working-directory: release
+        env:
+          BASE: ${{ steps.contract.outputs.base }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_WEB_APP: ${{ vars.AZURE_WEB_APP }}
+          EXPECTED_API_IMAGE: ${{ steps.build.outputs.api_image }}
+          EXPECTED_WEB_IMAGE: ${{ steps.build.outputs.web_image }}
+          INSTALLED_RELEASE_CONTEXT: /tmp/systemwide-enterprise-reliability-test-evidence/deployment-identity.json
+          PROJECTPULSE_TEST_UAT_SESSION: ${{ secrets.PROJECTPULSE_TEST_UAT_SESSION }}
+          PROJECTPULSE_TEST_UAT_ADMIN_EMAIL: ${{ secrets.PROJECTPULSE_TEST_UAT_ADMIN_EMAIL }}
+          PROJECTPULSE_TEST_UAT_ADMIN_PASSWORD: ${{ secrets.PROJECTPULSE_TEST_UAT_ADMIN_PASSWORD }}
+          PROJECTPULSE_M025_SA_EMAIL: ${{ secrets.PROJECTPULSE_M025_SA_EMAIL }}
+          PROJECTPULSE_M025_SA_PASSWORD: ${{ secrets.PROJECTPULSE_M025_SA_PASSWORD }}
+          PROJECTPULSE_M025_PM_EMAIL: ${{ secrets.PROJECTPULSE_M025_PM_EMAIL }}
+          PROJECTPULSE_M025_PM_PASSWORD: ${{ secrets.PROJECTPULSE_M025_PM_PASSWORD }}
+          MODULE025_GENERATION_TIMEOUT_SECONDS: '2520'
+        run: |
+          set -Eeuo pipefail
+          [[ "$BASE" == 'https://phd-west-test.onenecklab.com' && "$TARGET_RELEASE_BRANCH" == main ]]
+          API_JSON="$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" -o json --only-show-errors)"
+          WEB_JSON="$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEB_APP" -o json --only-show-errors)"
+          jq -e --arg image "$EXPECTED_API_IMAGE" --arg source "$TARGET_RELEASE_COMMIT" '
+            .tags.environment == "test" and .properties.template.containers[0].image == $image
+            and ([.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_SOURCE_COMMIT") | .value] == [$source])
+          ' <<<"$API_JSON" >/dev/null
+          jq -e --arg image "$EXPECTED_WEB_IMAGE" '.tags.environment == "test" and .properties.template.containers[0].image == $image' <<<"$WEB_JSON" >/dev/null
+          unset API_JSON WEB_JSON
+          ready=false
+          for attempt in $(seq 1 42); do
+            if curl -fsS --max-time 15 --proto '=https' -H 'Cache-Control: no-cache' "$BASE/health" | jq -e '.status == "healthy"' >/dev/null; then ready=true; break; fi
+            sleep 5
+          done
+          [[ "$ready" == true ]]
+          echo 'deployment_health_verified=true' >> "$GITHUB_OUTPUT"
+          jq -n --arg source "$TARGET_RELEASE_COMMIT" '{deploymentHealthVerified:true,sourceCommit:$source,productionMutation:false}' > "$EVIDENCE_DIR/deployment-health-verified.json"
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/verify-flowhive-installed-identity.py
+          sow_result=0
+          if [[ "$ACCEPTANCE_SCOPE" == sow_exports ]]; then
+            "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-module025-export-uat.py || sow_result=$?
+          else
+            "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-module025-installed-sa-uat.py || sow_result=$?
+          fi
+          if (( sow_result == 130 || sow_result == 143 )); then exit "$sow_result"; fi
+          my_role_result=0
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-flowhive-my-role-browser.py || my_role_result=$?
+          jq -n --argjson sowExit "$sow_result" --argjson myRoleExit "$my_role_result" \
+            '{sowLifecycleExit:$sowExit,myRoleExit:$myRoleExit,fullRequestedScopePassed:false}' > "$EVIDENCE_DIR/module025-scoped-results.json"
+          (( sow_result == 0 && my_role_result == 0 ))
+          if [[ "$ACCEPTANCE_SCOPE" == sow_exports ]]; then
+            jq -e '.status == "passed" and .generationPosts == 0 and .draftExportsVerified == true' "$EVIDENCE_DIR/module025-export-uat.json" >/dev/null
+          else
+            jq -e '.status == "passed"' "$EVIDENCE_DIR/module025-installed-sa-uat.json" >/dev/null
+          fi
+          jq -e '.status == "passed"' "$EVIDENCE_DIR/flowhive-my-role-browser.json" >/dev/null
+          echo 'MODULE025_SCOPED_DEPLOYMENT_ACCEPTANCE=PASSED'
+
+      - name: Run protected-Test authenticated functional UAT
+        id: uat
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (steps.psa_admission.outputs.authorized != 'true' && inputs.acceptance_scope != 'sow_role' && inputs.acceptance_scope != 'sow_exports') }}
+        shell: bash
+        env:
+          TEST_LOGIN_PASSWORD: ${{ secrets.PROJECTPULSE_M087_PASSWORD }}
+          BASE: ${{ steps.contract.outputs.base }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_WEB_APP: ${{ vars.AZURE_WEB_APP }}
+          EXPECTED_API_IMAGE: ${{ steps.build.outputs.api_image }}
+          EXPECTED_WEB_IMAGE: ${{ steps.build.outputs.web_image }}
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          READY=false
+          for attempt in $(seq 1 42); do
+            status="$(curl -sS --max-time 30 -o "$EVIDENCE_DIR/health.json" -w '%{http_code}' -H 'Cache-Control: no-cache' "$BASE/health?release=$GITHUB_RUN_ID-$attempt" || true)"
+            if [[ "$status" == 200 ]] && jq -e '.status == "healthy"' "$EVIDENCE_DIR/health.json" >/dev/null 2>&1; then READY=true; break; fi
+            sleep 5
+          done
+          [[ "$READY" == true ]] || fail 'Protected Test did not become healthy.'
+          echo 'deployment_health_verified=true' >> "$GITHUB_OUTPUT"
+          jq -n --arg source "$TARGET_RELEASE_COMMIT" '{deploymentHealthVerified:true,sourceCommit:$source,productionMutation:false}' > "$EVIDENCE_DIR/deployment-health-verified.json"
+
+          login() {
+            local username="$1" output="$2" password="$3" payload
+            payload="$(mktemp)"
+            chmod 0600 "$payload" "$output"
+            jq -n --arg username "$username" --arg password "$password" '{username:$username,password:$password}' > "$payload"
+            local status
+            status="$(curl -sS --max-time 90 -o "$output" -w '%{http_code}' \
+              -H 'Cache-Control: no-cache' -H 'Content-Type: application/json' \
+              -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' \
+              --data-binary @"$payload" "$BASE/api/auth/local/login" || true)"
+            rm -f "$payload"
+            printf '%s\n' "$status"
+          }
+
+          COORDINATOR='project.team.coordinator@ussignal.local'
+          WRONG_RESPONSE="$(mktemp)"
+          WRONG_STATUS="$(login "$COORDINATOR" "$WRONG_RESPONSE" 'this-is-not-the-protected-test-password')"
+          [[ "$WRONG_STATUS" == 401 || "$WRONG_STATUS" == 403 || "$WRONG_STATUS" == 423 ]] || fail "Deliberate failed-login UAT returned HTTP $WRONG_STATUS."
+          jq 'del(.sessionToken,.token,.password)' "$WRONG_RESPONSE" > "$EVIDENCE_DIR/failed-login-redacted.json" 2>/dev/null || true
+          rm -f "$WRONG_RESPONSE"
+
+          COORDINATOR_RESPONSE="$(mktemp)"
+          COORDINATOR_STATUS="$(login "$COORDINATOR" "$COORDINATOR_RESPONSE" "$TEST_LOGIN_PASSWORD")"
+          [[ "$COORDINATOR_STATUS" == 200 ]] || fail "Coordinator login returned HTTP $COORDINATOR_STATUS."
+          jq -e '.provider == "LOCAL" and .mustChangePassword == false and (.sessionToken | type == "string" and length > 0)' "$COORDINATOR_RESPONSE" >/dev/null || fail 'Coordinator login response did not satisfy the session contract.'
+          COORDINATOR_SESSION="$(jq -r '.sessionToken' "$COORDINATOR_RESPONSE")"
+          echo "::add-mask::$COORDINATOR_SESSION"
+          jq 'del(.sessionToken)' "$COORDINATOR_RESPONSE" > "$EVIDENCE_DIR/coordinator-login-redacted.json"
+          rm -f "$COORDINATOR_RESPONSE"
+
+          ENGINEER='demo.engineer@ussignal.local'
+          ENGINEER_RESPONSE="$(mktemp)"
+          ENGINEER_STATUS="$(login "$ENGINEER" "$ENGINEER_RESPONSE" "$TEST_LOGIN_PASSWORD")"
+          [[ "$ENGINEER_STATUS" == 200 ]] || fail "Engineer login returned HTTP $ENGINEER_STATUS."
+          jq -e '.provider == "LOCAL" and .mustChangePassword == false and (.sessionToken | type == "string" and length > 0)' "$ENGINEER_RESPONSE" >/dev/null || fail 'Engineer login response did not satisfy the session contract.'
+          ENGINEER_SESSION="$(jq -r '.sessionToken' "$ENGINEER_RESPONSE")"
+          echo "::add-mask::$ENGINEER_SESSION"
+          jq 'del(.sessionToken)' "$ENGINEER_RESPONSE" > "$EVIDENCE_DIR/engineer-login-redacted.json"
+          rm -f "$ENGINEER_RESPONSE"
+
+          PROJECT_MANAGER='heather.schrock@ussignal.local'
+          PROJECT_MANAGER_RESPONSE="$(mktemp)"
+          PROJECT_MANAGER_STATUS="$(login "$PROJECT_MANAGER" "$PROJECT_MANAGER_RESPONSE" "$TEST_LOGIN_PASSWORD")"
+          [[ "$PROJECT_MANAGER_STATUS" == 200 ]] || fail "Project Manager login returned HTTP $PROJECT_MANAGER_STATUS."
+          jq -e '.provider == "LOCAL" and .mustChangePassword == false and (.sessionToken | type == "string" and length > 0)' "$PROJECT_MANAGER_RESPONSE" >/dev/null || fail 'Project Manager login response did not satisfy the session contract.'
+          PROJECT_MANAGER_SESSION="$(jq -r '.sessionToken' "$PROJECT_MANAGER_RESPONSE")"
+          echo "::add-mask::$PROJECT_MANAGER_SESSION"
+          jq 'del(.sessionToken)' "$PROJECT_MANAGER_RESPONSE" > "$EVIDENCE_DIR/project-manager-login-redacted.json"
+          rm -f "$PROJECT_MANAGER_RESPONSE"
+
+          auth_get() {
+            local path="$1" output="$2" headers="$3" stderr_file="$4"
+            local session="${5:-$COORDINATOR_SESSION}" module_number="${6:-019}"
+            local status curl_exit
+            : > "$output"
+            : > "$headers"
+            : > "$stderr_file"
+            set +e
+            status="$(curl -sS --http1.1 --connect-timeout 30 --max-time 120 \
+              --dump-header "$headers" \
+              --output "$output" \
+              --write-out '%{http_code}' \
+              -H 'Cache-Control: no-cache' \
+              -H "Authorization: Bearer $session" \
+              -H "X-ProjectPulse-Session: $session" \
+              -H "X-ProjectPulse-Module-Number: $module_number" \
+              -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' \
+              "$BASE$path" 2>"$stderr_file")"
+            curl_exit=$?
+            set -e
+            printf '%s|%s\n' "$curl_exit" "${status:-000}"
+          }
+          auth_post_as() {
+            local path="$1" input="$2" output="$3" session="$4" module_number="$5"
+            curl -sS --http1.1 --connect-timeout 30 --max-time 240 -o "$output" -w '%{http_code}' \
+              -H 'Cache-Control: no-cache' -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $session" \
+              -H "X-ProjectPulse-Session: $session" \
+              -H "X-ProjectPulse-Module-Number: $module_number" \
+              -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' \
+              --data-binary @"$input" "$BASE$path" || true
+          }
+          auth_post() {
+            auth_post_as "$1" "$2" "$3" "$COORDINATOR_SESSION" '011'
+          }
+          require_get() {
+            local name="$1" path="$2" output="$3"
+            local session="${4:-$COORDINATOR_SESSION}" module_number="${5:-019}"
+            local attempt result curl_exit status headers stderr_file body_bytes content_type
+            for attempt in 1 2 3; do
+              headers="$(mktemp)"
+              stderr_file="$(mktemp)"
+              result="$(auth_get "$path" "$output" "$headers" "$stderr_file" "$session" "$module_number")"
+              IFS='|' read -r curl_exit status <<<"$result"
+              status="${status:-000}"
+              body_bytes="$(wc -c < "$output" | tr -d '[:space:]')"
+              content_type="$(awk '
+                BEGIN { IGNORECASE=1 }
+                /^content-type:/ {
+                  sub(/\r$/, "")
+                  value=$0
+                  sub(/^[^:]+:[[:space:]]*/, "", value)
+                }
+                END { print value }
+              ' "$headers")"
+
+              jq -n \
+                --arg name "$name" \
+                --arg path "$path" \
+                --argjson attempt "$attempt" \
+                --argjson curlExit "$curl_exit" \
+                --arg httpStatus "$status" \
+                --arg contentType "$content_type" \
+                --argjson bodyBytes "$body_bytes" \
+                '{name:$name,path:$path,attempt:$attempt,curlExit:$curlExit,httpStatus:$httpStatus,contentType:$contentType,bodyBytes:$bodyBytes}' \
+                >> "$EVIDENCE_DIR/uat-http-diagnostics.ndjson"
+
+              if [[ "$curl_exit" == 0 && "$status" == 200 && "$body_bytes" -gt 0 ]] \
+                && jq -e . "$output" >/dev/null 2>&1; then
+                rm -f "$headers" "$stderr_file"
+                return 0
+              fi
+
+              {
+                printf 'name=%s attempt=%s curl_exit=%s http_status=%s content_type=%s body_bytes=%s\n' \
+                  "$name" "$attempt" "$curl_exit" "$status" "${content_type:-none}" "$body_bytes"
+                if [[ -s "$stderr_file" ]]; then
+                  sed -E 's/(Bearer|X-ProjectPulse-Session:)[[:space:]]+[^[:space:]]+/\1 [REDACTED]/g' "$stderr_file"
+                fi
+              } >> "$EVIDENCE_DIR/uat-http-errors.log"
+              rm -f "$headers" "$stderr_file"
+              (( attempt < 3 )) && sleep $((attempt * 3))
+            done
+
+            fail "$name failed after 3 attempts (curl exit $curl_exit; HTTP $status; content type ${content_type:-none}; body bytes $body_bytes)."
+          }
+
+          # Exercise the reported interactive timeout before document-specific
+          # FlowHive gates, so its provider decisions survive later UAT failures.
+          ROUTING_SMOKE_PAYLOAD="$(mktemp)"
+          jq -n '{question:"How many states are there in the US?",mode:"system_help",detailLevel:"standard",includeRepositoryContext:false,includeAuthorizedProjectDocuments:false,includeApiInventory:false,includeTroubleshooting:false,usePrivateModelWhenAvailable:true}' > "$ROUTING_SMOKE_PAYLOAD"
+          ROUTING_SMOKE_STARTED=$SECONDS
+          ROUTING_SMOKE_STATUS="$(auth_post '/api/celar-ai/v2/chat' "$ROUTING_SMOKE_PAYLOAD" "$EVIDENCE_DIR/module064-chat-routing-smoke.json")"
+          ROUTING_SMOKE_SECONDS=$((SECONDS - ROUTING_SMOKE_STARTED))
+          rm -f "$ROUTING_SMOKE_PAYLOAD"
+          [[ "$ROUTING_SMOKE_STATUS" == 200 ]] || fail "Module 064 chat routing smoke returned HTTP $ROUTING_SMOKE_STATUS."
+          jq -e '
+            (.result.answer.directConclusion | test("\\b50\\b|\\bfifty\\b"; "i"))
+            and (.reliability.assessment.passed == true)
+            and (.result.sources | any(.sourceCode == "census_state_codes" and .statusCode == 200))
+          ' "$EVIDENCE_DIR/module064-chat-routing-smoke.json" >/dev/null || fail 'Celar chat did not return the officially verified state count.'
+          (( ROUTING_SMOKE_SECONDS < 55 )) || fail "Celar public fact exceeded the interactive deadline: $ROUTING_SMOKE_SECONDS seconds."
+          echo "MODULE064_PUBLIC_FACT_SMOKE=PASS durationSeconds=$ROUTING_SMOKE_SECONDS"
+
+          # A verified public fact can complete without an LLM. Separately
+          # require a model-backed answer and actual saved-order decisions.
+          ROUTING_SMOKE_PAYLOAD="$(mktemp)"
+          jq -n '{question:"Explain how rainbows form using the words refraction and reflection in your step-by-step explanation.",mode:"system_help",detailLevel:"standard",includeRepositoryContext:false,includeAuthorizedProjectDocuments:false,includeApiInventory:false,includeTroubleshooting:false,usePrivateModelWhenAvailable:true}' > "$ROUTING_SMOKE_PAYLOAD"
+          ROUTING_SMOKE_STARTED=$SECONDS
+          ROUTING_SMOKE_STATUS="$(auth_post '/api/celar-ai/v2/chat' "$ROUTING_SMOKE_PAYLOAD" "$EVIDENCE_DIR/module064-provider-routing-smoke.json")"
+          ROUTING_SMOKE_SECONDS=$((SECONDS - ROUTING_SMOKE_STARTED))
+          rm -f "$ROUTING_SMOKE_PAYLOAD"
+          [[ "$ROUTING_SMOKE_STATUS" == 200 ]] || fail "Module 064 provider routing returned HTTP $ROUTING_SMOKE_STATUS."
+          jq -e '
+            ([.result.answer.directConclusion, .result.answer.detailedAnalysis[]?] | join("\n") | test("refract"; "i") and test("reflect"; "i"))
+            and (.result.modelProvider as $provider | ["deepseek_v4","celar_ai","claude","openai"] | index($provider) != null)
+            and ((.result.targetDecisions // []) | any(.outcome == "used"))
+            and (.providerConfiguration.targets as $order
+              | [.result.targetDecisions[].target | . as $target | $order | index($target)] as $positions
+              | ($positions | all(. != null)) and ($positions == ($positions | sort)))
+          ' "$EVIDENCE_DIR/module064-provider-routing-smoke.json" >/dev/null || fail 'Module 064 chat did not return a model-generated answer in saved provider order.'
+          (( ROUTING_SMOKE_SECONDS < 55 )) || fail "Module 064 chat exceeded the interactive deadline: $ROUTING_SMOKE_SECONDS seconds."
+          jq '{status,provider:.result.modelProvider,targetDecisions:.result.targetDecisions}' "$EVIDENCE_DIR/module064-provider-routing-smoke.json"
+          echo "MODULE064_CHAT_ROUTING_SMOKE=PASS durationSeconds=$ROUTING_SMOKE_SECONDS"
+
+          require_get 'Project Management summary' '/api/project-management/summary' "$EVIDENCE_DIR/project-management-summary.json"
+          require_get 'Project Intake overview' '/api/project-intake/overview' "$EVIDENCE_DIR/project-intake-overview.json"
+          require_get 'Project financial portfolio' '/api/project-financials/portfolio?workspace=pm&limit=250' "$EVIDENCE_DIR/project-financial-portfolio.json"
+          require_get 'Cost alert workflow' '/api/projects/cost-alerts' "$EVIDENCE_DIR/cost-alerts.json"
+          require_get 'Customer directory' '/api/customers/overview' "$EVIDENCE_DIR/customer-directory.json"
+          require_get 'Project Manager module availability' '/api/module-availability/overrides' "$EVIDENCE_DIR/project-manager-module-availability.json" "$PROJECT_MANAGER_SESSION" '009'
+          jq -e '(.states | type == "array") and ((.access.effectiveRoles // []) | any(. == "PROJECT_MANAGEMENT" or . == "PROJECT_MANAGER"))' "$EVIDENCE_DIR/project-manager-module-availability.json" >/dev/null || fail 'Project Manager module availability did not preserve effective role evidence.'
+          require_get 'Project Manager Work Register overview' '/api/work-register/overview' "$EVIDENCE_DIR/project-manager-work-register.json" "$PROJECT_MANAGER_SESSION" '055C'
+          jq -e '(.workItems | type == "array") and ((.workItems | length) > 0) and (.access.scope == "managed_projects" or .access.scope == "project_management_team")' "$EVIDENCE_DIR/project-manager-work-register.json" >/dev/null || fail 'Project Manager Work Register scope did not return an authorized project collection.'
+          require_get 'Project Manager Approval access' '/api/approval-center/access' "$EVIDENCE_DIR/project-manager-approval-access.json" "$PROJECT_MANAGER_SESSION" '002'
+          jq -e '.canViewTimeApprovals == true and ((.roleCodes // []) | any(. == "PROJECT_MANAGEMENT" or . == "PROJECT_MANAGER" or . == "PROJECT_MANAGEMENT_LEAD"))' "$EVIDENCE_DIR/project-manager-approval-access.json" >/dev/null || fail 'Project Manager Approval Inbox access was not available.'
+          require_get 'Opportunity directory' '/api/opportunities?scope=all' "$EVIDENCE_DIR/opportunities.json" "$ENGINEER_SESSION" '063'
+          ENGINEER_LOGOUT_STATUS="$(curl -sS --max-time 60 -o "$EVIDENCE_DIR/engineer-logout.json" -w '%{http_code}' \
+            -X POST -H "Authorization: Bearer $ENGINEER_SESSION" -H "X-ProjectPulse-Session: $ENGINEER_SESSION" \
+            -H 'X-ProjectPulse-Module-Number: 063' \
+            -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' "$BASE/api/auth/session/logout" || true)"
+          [[ "$ENGINEER_LOGOUT_STATUS" == 200 ]] || fail "Engineer logout returned HTTP $ENGINEER_LOGOUT_STATUS."
+          unset ENGINEER_SESSION
+          require_get 'Project Manager FlowHive portfolio' '/api/project-flowhive/portfolio' "$EVIDENCE_DIR/flowhive-portfolio.json" "$PROJECT_MANAGER_SESSION" '066'
+
+          PREFERRED_FLOWHIVE_PROJECT_ID='0ea25cb8-1a7f-4baf-ba7b-2dd76215be49'
+          mapfile -t FLOWHIVE_PROJECT_CANDIDATES < <(jq -r --arg preferred "$PREFERRED_FLOWHIVE_PROJECT_ID" '
+            ([.projects[]? | select(.projectId == $preferred)] + [.projects[]? | select(.projectId != $preferred)])
+            | .[] | .projectId
+          ' "$EVIDENCE_DIR/flowhive-portfolio.json" | head -25)
+          (( ${#FLOWHIVE_PROJECT_CANDIDATES[@]} > 0 )) || fail 'No editable Project Manager FlowHive project was available for AI Planner UAT.'
+
+          PROJECT_ID=''
+          for candidate_id in "${FLOWHIVE_PROJECT_CANDIDATES[@]}"; do
+            [[ "$candidate_id" =~ ^[0-9a-fA-F-]{36}$ ]] || continue
+            candidate_output="$EVIDENCE_DIR/flowhive-enterprise-$candidate_id.json"
+            candidate_headers="$(mktemp)"
+            candidate_stderr="$(mktemp)"
+            candidate_result="$(auth_get "/api/project-flowhive/projects/$candidate_id/enterprise" "$candidate_output" "$candidate_headers" "$candidate_stderr" "$PROJECT_MANAGER_SESSION" '066')"
+            IFS='|' read -r candidate_curl_exit candidate_status <<<"$candidate_result"
+            rm -f "$candidate_headers" "$candidate_stderr"
+            if [[ "$candidate_curl_exit" == 0 && "$candidate_status" == 200 ]] \
+              && jq -e '
+                .status == "flowhive_enterprise_workspace_loaded"
+                and .access.canEditPlanner == true
+                and ((.sowEvidence // []) | any(
+                  ((.documentCategory // "") | ascii_downcase) == "sow"
+                  or ((.documentCategory // "") | ascii_downcase) == "statement_of_work"
+                ))
+              ' "$candidate_output" >/dev/null 2>&1; then
+              PROJECT_ID="$candidate_id"
+              cp "$candidate_output" "$EVIDENCE_DIR/flowhive-enterprise.json"
+              break
+            fi
+          done
+          [[ "$PROJECT_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail 'No Project Manager project exposed its existing Work Register SOW to FlowHive.'
+          jq -e '.status == "flowhive_enterprise_workspace_loaded" and .access.canEditPlanner == true' "$EVIDENCE_DIR/flowhive-enterprise.json" >/dev/null || fail 'FlowHive enterprise workspace did not satisfy the Planner edit contract.'
+          jq -e '(.sowEvidence // []) | any(
+            ((.documentCategory // "") | ascii_downcase) == "sow"
+            or ((.documentCategory // "") | ascii_downcase) == "statement_of_work"
+          )' "$EVIDENCE_DIR/flowhive-enterprise.json" >/dev/null || fail 'FlowHive did not resolve the project Work Register SOW without a duplicate upload.'
+
+          # A protected-Test project may already contain a prior, valid AI working
+          # draft from an earlier exact-SHA release. Re-running UAT must prove that
+          # FlowHive preserves that mutable draft and returns a review candidate,
+          # not require destructive overwrite to call the planner healthy.
+          FLOWHIVE_EXISTING_WORKING_ROW_VERSION="$(jq -r '.workingCopy.rowVersion // empty' "$EVIDENCE_DIR/flowhive-enterprise.json")"
+          FLOWHIVE_EXISTING_DRAFT_READY=false
+          if [[ "$FLOWHIVE_EXISTING_WORKING_ROW_VERSION" =~ ^[0-9a-fA-F-]{36}$ ]]             && jq -e '
+              .workingCopy.plan.sourceKind == "celar_ai"
+              and .workingCopy.schedule.valid == true
+              and .workingCopy.validation.valid == true
+              and ((.workingCopy.plan.dependencies // []) | length > 0)
+              and ((.workingCopy.plan.tasks // []) as $tasks
+                | ($tasks | map(select((.isSummary // false) == false and (.isMilestone // false) == false))) as $executable
+                | ($executable | length) >= 10
+                and (($executable | map(.phase) | unique) | index("Plan") != null)
+                and (($executable | map(.phase) | unique) | index("Design") != null)
+                and (($executable | map(.phase) | unique) | index("Implement") != null)
+                and (($executable | map(.phase) | unique) | index("Validate") != null)
+                and (($executable | map(.phase) | unique) | index("Release") != null)
+                and all($executable[];
+                  ((.description // "") | length) >= 20
+                  and ((.detailedSteps // []) | length) >= 2
+                  and ((.citationIds // []) | length) > 0
+                  and (.durationWorkingDays // 0) >= 1
+                  and (.remainingEffortHours // -1) >= 0
+                  and ((.estimatedStartDate // "") | length) == 10
+                  and ((.estimatedFinishDate // "") | length) == 10
+                ))
+            ' "$EVIDENCE_DIR/flowhive-enterprise.json" >/dev/null 2>&1; then
+            FLOWHIVE_EXISTING_DRAFT_READY=true
+          fi
+
+          PROJECT_ROW="$(jq -c --arg projectId "$PROJECT_ID" '.projects[] | select(.projectId == $projectId)' "$EVIDENCE_DIR/flowhive-portfolio.json" | head -1)"
+          [[ -n "$PROJECT_ROW" ]] || fail 'The selected FlowHive UAT project was not present in the PM portfolio.'
+          PROJECT_CODE="$(jq -r '.projectCode // "UAT-PROJECT"' <<<"$PROJECT_ROW")"
+          PROJECT_NAME="$(jq -r '.projectName // "Protected UAT project"' <<<"$PROJECT_ROW")"
+          CUSTOMER_NAME="$(jq -r '.customerName // "Protected UAT customer"' <<<"$PROJECT_ROW")"
+          PROJECT_START_DATE="$(jq -r '.startDate // empty' <<<"$PROJECT_ROW")"
+          PROJECT_END_DATE="$(jq -r '.endDate // empty' <<<"$PROJECT_ROW")"
+          [[ "$PROJECT_START_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || PROJECT_START_DATE="$(date -u +%F)"
+
+          FLOWHIVE_PAYLOAD="$(mktemp)"
+          jq -n \
+            --arg projectId "$PROJECT_ID" \
+            --arg projectCode "$PROJECT_CODE" \
+            --arg projectName "$PROJECT_NAME" \
+            --arg customerName "$CUSTOMER_NAME" \
+            --arg start "$PROJECT_START_DATE" \
+            --arg end "$PROJECT_END_DATE" \
+            '{
+              plan:{
+                projectId:$projectId,
+                projectCode:$projectCode,
+                projectName:$projectName,
+                customerName:$customerName,
+                planName:"Protected UAT AI working draft",
+                revisionLabel:"Protected UAT",
+                projectStartDate:$start,
+                projectEndDate:(if $end == "" then null else $end end),
+                tasks:[],dependencies:[],assignments:[],
+                notes:"Protected UAT verifies automatic project-document processing and source-grounded five-phase planning."
+              },
+              requestedOutcome:"Use the existing project Work Register SOW, current GSD, and supporting project documents to create a detailed Plan, Design, Implement, Validate, and Release working draft. Preserve estimates and expose any missing facts as open questions.",
+              detailLevel:"comprehensive"
+            }' > "$FLOWHIVE_PAYLOAD"
+          FLOWHIVE_START_STATUS="$(auth_post_as "/api/project-flowhive/projects/$PROJECT_ID/ai-planner/runs" "$FLOWHIVE_PAYLOAD" "$EVIDENCE_DIR/flowhive-ai-planner.json" "$PROJECT_MANAGER_SESSION" '066')"
+          rm -f "$FLOWHIVE_PAYLOAD"
+          [[ "$FLOWHIVE_START_STATUS" == 200 || "$FLOWHIVE_START_STATUS" == 202 ]] || fail "FlowHive AI Planner start returned HTTP $FLOWHIVE_START_STATUS; expected 200 or 202 and no 400/422/503."
+          jq -e . "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null || fail 'FlowHive AI Planner start did not return JSON.'
+          FLOWHIVE_RUN_ID="$(jq -r '.runId // empty' "$EVIDENCE_DIR/flowhive-ai-planner.json")"
+          [[ "$FLOWHIVE_RUN_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail 'FlowHive AI Planner did not return a durable run identifier.'
+
+          FLOWHIVE_READY=false
+          FLOWHIVE_READY_MODE=''
+          attempt=0
+          # Durable DeepSeek + Oracle generation has a bounded 80-minute window.
+          FLOWHIVE_DEADLINE=$((SECONDS + 4800))
+          while (( SECONDS < FLOWHIVE_DEADLINE )); do
+            attempt=$(( ${attempt:-0} + 1 ))
+            if jq -e '
+              (.status == "completed" or .status == "completed_with_schedule_overrun")
+              and .phase == "working_draft_ready"
+              and .workingDraft.persisted == true
+            ' "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null 2>&1; then
+              FLOWHIVE_READY=true
+              FLOWHIVE_READY_MODE='new_working_draft'
+              break
+            fi
+            if jq -e '.terminal == true' "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null 2>&1; then
+              if [[ "$FLOWHIVE_EXISTING_DRAFT_READY" == true ]]                 && jq -e '
+                  (.status == "completed" or .status == "completed_with_schedule_overrun")
+                  and .phase == "candidate_review_required"
+                  and .candidateAvailable == true
+                  and .candidate.persisted == true
+                  and .candidate.schedule.valid == true
+                  and .candidate.validation.valid == true
+                  and ((.candidate.plan.dependencies // []) | length > 0)
+                  and ((.candidate.plan.tasks // []) as $tasks
+                    | ($tasks | map(select((.isSummary // false) == false and (.isMilestone // false) == false))) as $executable
+                    | ($executable | length) >= 10
+                    and (($executable | map(.phase) | unique) | index("Plan") != null)
+                    and (($executable | map(.phase) | unique) | index("Design") != null)
+                    and (($executable | map(.phase) | unique) | index("Implement") != null)
+                    and (($executable | map(.phase) | unique) | index("Validate") != null)
+                    and (($executable | map(.phase) | unique) | index("Release") != null)
+                    and all($executable[];
+                      ((.description // "") | length) >= 20
+                      and ((.detailedSteps // []) | length) >= 2
+                      and ((.citationIds // []) | length) > 0
+                      and (.durationWorkingDays // 0) >= 1
+                      and (.remainingEffortHours // -1) >= 0
+                    ))
+                ' "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null 2>&1; then
+                FLOWHIVE_READY=true
+                FLOWHIVE_READY_MODE='preserved_existing_working_draft'
+                break
+              fi
+              fail "FlowHive AI Planner reached terminal status $(jq -r '.status' "$EVIDENCE_DIR/flowhive-ai-planner.json") before a working draft was ready or a valid existing draft was safely preserved."
+            fi
+            sleep 10
+            flowhive_headers="$(mktemp)"
+            flowhive_stderr="$(mktemp)"
+            flowhive_result="$(auth_get "/api/project-flowhive/projects/$PROJECT_ID/ai-planner/runs/$FLOWHIVE_RUN_ID" "$EVIDENCE_DIR/flowhive-ai-planner.json" "$flowhive_headers" "$flowhive_stderr" "$PROJECT_MANAGER_SESSION" '066')"
+            IFS='|' read -r flowhive_curl_exit flowhive_status <<<"$flowhive_result"
+            rm -f "$flowhive_headers" "$flowhive_stderr"
+            [[ "$flowhive_curl_exit" == 0 && ( "$flowhive_status" == 200 || "$flowhive_status" == 202 ) ]] || fail "FlowHive AI Planner poll returned curl=$flowhive_curl_exit HTTP=$flowhive_status; expected 200 or 202 while processing and no 400/422/503."
+            jq -e . "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null || fail 'FlowHive AI Planner poll did not return JSON.'
+            printf 'attempt=%s httpStatus=%s status=%s phase=%s terminal=%s\n' \
+              "$attempt" "$flowhive_status" \
+              "$(jq -r '.status // "unknown"' "$EVIDENCE_DIR/flowhive-ai-planner.json")" \
+              "$(jq -r '.phase // "unknown"' "$EVIDENCE_DIR/flowhive-ai-planner.json")" \
+              "$(jq -r '.terminal // false' "$EVIDENCE_DIR/flowhive-ai-planner.json")" \
+              >> "$EVIDENCE_DIR/flowhive-ai-planner-polls.log"
+          done
+          [[ "$FLOWHIVE_READY" == true ]] || fail 'FlowHive AI Planner did not produce a reviewable plan outcome after automatic document processing.'
+          if [[ "$FLOWHIVE_READY_MODE" == 'new_working_draft' ]]; then
+            jq -e '
+              .workingDraft.persisted == true
+              and .workingDraft.immutableVersionCreated == false
+              and .workingDraft.baselineCreated == false
+              and .planningEvidence.sourceGrounded == true
+              and .schedule.valid == true
+              and .scheduleAssessment.estimatesCompressed == false
+              and ((.plan.dependencies // []) | length > 0)
+              and ((.plan.tasks // []) as $tasks
+                | ($tasks | map(select((.isSummary // false) == false and (.isMilestone // false) == false))) as $executable
+                | ($executable | length) > 0
+                and (($executable | map(.phase) | unique) | index("Plan") != null)
+                and (($executable | map(.phase) | unique) | index("Design") != null)
+                and (($executable | map(.phase) | unique) | index("Implement") != null)
+                and (($executable | map(.phase) | unique) | index("Validate") != null)
+                and (($executable | map(.phase) | unique) | index("Release") != null)
+                and all($executable[];
+                  ((.description // "") | length) >= 20
+                  and ((.detailedSteps // []) | length) > 0
+                  and ((.citationIds // []) | length) > 0
+                  and (.durationWorkingDays // 0) >= 1
+                  and (.remainingEffortHours // -1) >= 0
+                  and ((.estimatedStartDate // "") | length) == 10
+                  and ((.estimatedFinishDate // "") | length) == 10
+                ))
+            ' "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null || fail 'FlowHive AI Planner did not satisfy the source-cited working-draft contract.'
+          else
+            require_get 'FlowHive preserved working copy' "/api/project-flowhive/projects/$PROJECT_ID/enterprise" "$EVIDENCE_DIR/flowhive-enterprise-after.json" "$PROJECT_MANAGER_SESSION" '066'
+            jq -e --arg expectedVersion "$FLOWHIVE_EXISTING_WORKING_ROW_VERSION" '
+              .workingCopy.rowVersion == $expectedVersion
+              and .workingCopy.plan.sourceKind == "celar_ai"
+              and .workingCopy.schedule.valid == true
+              and .workingCopy.validation.valid == true
+              and ((.workingCopy.plan.dependencies // []) | length > 0)
+              and ((.workingCopy.plan.tasks // []) as $tasks
+                | ($tasks | map(select((.isSummary // false) == false and (.isMilestone // false) == false))) as $executable
+                | ($executable | length) >= 10
+                and (($executable | map(.phase) | unique) | index("Plan") != null)
+                and (($executable | map(.phase) | unique) | index("Design") != null)
+                and (($executable | map(.phase) | unique) | index("Implement") != null)
+                and (($executable | map(.phase) | unique) | index("Validate") != null)
+                and (($executable | map(.phase) | unique) | index("Release") != null)
+                and all($executable[];
+                  ((.description // "") | length) >= 20
+                  and ((.detailedSteps // []) | length) >= 2
+                  and ((.citationIds // []) | length) > 0
+                  and (.durationWorkingDays // 0) >= 1
+                  and (.remainingEffortHours // -1) >= 0
+                ))
+            ' "$EVIDENCE_DIR/flowhive-enterprise-after.json" >/dev/null || fail 'FlowHive did not preserve the existing source-cited working draft during reviewed regeneration.'
+            jq -e '
+              .workingDraft.persisted == false
+              and .workingDraft.immutableVersionCreated == false
+              and .workingDraft.baselineCreated == false
+              and .candidateAvailable == true
+              and .candidate.persisted == true
+              and .candidate.schedule.valid == true
+              and .candidate.validation.valid == true
+            ' "$EVIDENCE_DIR/flowhive-ai-planner.json" >/dev/null || fail 'FlowHive reviewed regeneration did not preserve the existing draft and retain the new candidate safely.'
+          fi
+          echo "FLOWHIVE_AI_PLANNER_UAT=PASSED mode=$FLOWHIVE_READY_MODE"
+
+          FORGE_PAYLOAD="$(mktemp)"
+          jq -n '{
+            requestedOutcome:"Use the same current Work Register SOW, GSD, and supporting project documents as FlowHive to create a detailed five-phase Project Forge review draft.",
+            detailLevel:"comprehensive",
+            allowSanitizedExternalFallback:true
+          }' > "$FORGE_PAYLOAD"
+          FORGE_READY=false
+          FORGE_STATUS='000'
+          for attempt in $(seq 1 60); do
+            FORGE_STATUS="$(auth_post_as "/api/project-forge/projects/$PROJECT_ID/ai-drafts" "$FORGE_PAYLOAD" "$EVIDENCE_DIR/project-forge-ai-draft.json" "$PROJECT_MANAGER_SESSION" '033')"
+            [[ "$FORGE_STATUS" != 400 && "$FORGE_STATUS" != 422 && "$FORGE_STATUS" != 503 ]] || fail "Project Forge AI planning returned forbidden HTTP $FORGE_STATUS."
+            jq -e . "$EVIDENCE_DIR/project-forge-ai-draft.json" >/dev/null || fail 'Project Forge AI planning did not return JSON.'
+            if [[ "$FORGE_STATUS" == 201 ]] \
+              && jq -e '.status == "document_grounded_review_draft_created"' "$EVIDENCE_DIR/project-forge-ai-draft.json" >/dev/null 2>&1; then
+              FORGE_READY=true
+              break
+            fi
+            if [[ "$FORGE_STATUS" == 202 ]]; then
+              sleep 10
+              continue
+            fi
+            fail "Project Forge AI planning stopped at HTTP $FORGE_STATUS status $(jq -r '.status // "unknown"' "$EVIDENCE_DIR/project-forge-ai-draft.json")."
+          done
+          rm -f "$FORGE_PAYLOAD"
+          [[ "$FORGE_READY" == true ]] || fail 'Project Forge did not create its source-grounded review draft.'
+          PROJECT_FORGE_PLAN_ID="$(jq -r '.planId // empty' "$EVIDENCE_DIR/project-forge-ai-draft.json")"
+          [[ "$PROJECT_FORGE_PLAN_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail 'Project Forge did not return its review-plan identifier.'
+          jq -e '
+            .status == "document_grounded_review_draft_created"
+            and .controls.humanReviewRequired == true
+            and .controls.adopted == false
+            and .controls.canonicalTasksCreated == false
+            and .controls.assignmentsCreated == false
+            and .controls.automaticBaselineCreated == false
+            and ((.documentAuthority.sowDocumentId // "") | length) == 36
+            and ((.plan.dependencies // []) | length > 0)
+            and ((.plan.tasks // []) as $tasks
+              | ($tasks | map(select((.taskType // "") != "milestone"))) as $executable
+              | ($executable | length) > 0
+              and (($executable | map(.phase) | unique) | index("Plan") != null)
+              and (($executable | map(.phase) | unique) | index("Design") != null)
+              and (($executable | map(.phase) | unique) | index("Implement") != null)
+              and (($executable | map(.phase) | unique) | index("Validate") != null)
+              and (($executable | map(.phase) | unique) | index("Release") != null)
+              and all($executable[];
+                ((.description // "") | length) >= 20
+                and (.durationWorkingDays // 0) >= 1
+                and (.estimatedHours // -1) >= 0
+              ))
+          ' "$EVIDENCE_DIR/project-forge-ai-draft.json" >/dev/null || fail 'Project Forge did not preserve the shared five-phase review-only planning contract.'
+          require_get 'Project Forge persisted review workspace' "/api/project-forge/bootstrap?projectId=$PROJECT_ID&workspace=review_plan&planId=$PROJECT_FORGE_PLAN_ID" "$EVIDENCE_DIR/project-forge-review-workspace.json" "$PROJECT_MANAGER_SESSION" '033'
+          jq -e --arg planId "$PROJECT_FORGE_PLAN_ID" '
+            .status == "project_forge_loaded"
+            and .workspace == "review_plan"
+            and (.selectedPlanId | tostring) == $planId
+            and ((.tasks // []) | length) > 0
+          ' "$EVIDENCE_DIR/project-forge-review-workspace.json" >/dev/null || fail 'Project Forge review draft was not persisted in its governed review workspace.'
+          echo 'PROJECT_FORGE_AI_PLANNER_UAT=PASSED'
+
+          PROJECT_MANAGER_LOGOUT_STATUS="$(curl -sS --max-time 60 -o "$EVIDENCE_DIR/project-manager-logout.json" -w '%{http_code}' \
+            -X POST -H "Authorization: Bearer $PROJECT_MANAGER_SESSION" -H "X-ProjectPulse-Session: $PROJECT_MANAGER_SESSION" \
+            -H 'X-ProjectPulse-Module-Number: 033' \
+            -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' "$BASE/api/auth/session/logout" || true)"
+          [[ "$PROJECT_MANAGER_LOGOUT_STATUS" == 200 ]] || fail "Project Manager logout returned HTTP $PROJECT_MANAGER_LOGOUT_STATUS."
+          unset PROJECT_MANAGER_SESSION
+          LOGOUT_STATUS="$(curl -sS --max-time 60 -o "$EVIDENCE_DIR/logout.json" -w '%{http_code}' \
+            -X POST -H "Authorization: Bearer $COORDINATOR_SESSION" -H "X-ProjectPulse-Session: $COORDINATOR_SESSION" \
+            -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' "$BASE/api/auth/session/logout" || true)"
+          [[ "$LOGOUT_STATUS" == 200 ]] || fail "Logout UAT returned HTTP $LOGOUT_STATUS."
+          unset COORDINATOR_SESSION
+
+          COORDINATOR_RESPONSE="$(mktemp)"
+          COORDINATOR_STATUS="$(login "$COORDINATOR" "$COORDINATOR_RESPONSE" "$TEST_LOGIN_PASSWORD")"
+          [[ "$COORDINATOR_STATUS" == 200 ]] || fail "Second coordinator login returned HTTP $COORDINATOR_STATUS."
+          COORDINATOR_SESSION="$(jq -r '.sessionToken' "$COORDINATOR_RESPONSE")"
+          echo "::add-mask::$COORDINATOR_SESSION"
+          rm -f "$COORDINATOR_RESPONSE"
+          require_get 'Audit history' '/api/admin/audit-history/events?days=1&limit=250&category=authentication' "$EVIDENCE_DIR/audit-authentication.json"
+          jq -e '
+            .status == "audit_history_loaded"
+            and (.centralAudit.available == true)
+            and ((.events // []) | type == "array")
+            and ((.events // []) | length > 0)
+          ' "$EVIDENCE_DIR/audit-authentication.json" >/dev/null || fail 'Audit History did not return an available authentication event collection.'
+          jq -e '
+            any(.events[]?;
+              (.details.event_type // "") == "login_succeeded"
+              or (((.eventType // "") | ascii_downcase) == "login succeeded")
+            )
+          ' "$EVIDENCE_DIR/audit-authentication.json" >/dev/null || fail 'Successful login was not visible in Audit History.'
+          jq -e '
+            any(.events[]?;
+              (.details.event_type // "") == "login_failed"
+              or (((.eventType // "") | ascii_downcase) == "login failed")
+            )
+          ' "$EVIDENCE_DIR/audit-authentication.json" >/dev/null || fail 'Failed login was not visible in Audit History.'
+          jq -e '
+            any(.events[]?;
+              (.details.event_type // "") == "logout_succeeded"
+              or (.details.login_result // "") == "logout_success"
+              or (.details.revoked_reason // "") == "user_logout"
+              or (((.eventType // "") | ascii_downcase) == "logout succeeded")
+            )
+          ' "$EVIDENCE_DIR/audit-authentication.json" >/dev/null || fail 'Logout was not visible in Audit History.'
+
+          ask_public_fact() {
+            local question="$1" output="$2" payload
+            payload="$(mktemp)"
+            jq -n --arg question "$question" '{conversationId:null,question:$question,projectCode:null,projectName:null,mode:"system_help",detailLevel:"comprehensive",includeRepositoryContext:false,includeAssumptions:true,includeSourceCitations:true,answerPreferenceSource:"protected_test_uat",includeApiInventory:false,includeTroubleshooting:false,includeFutureEnhancement:false,includeAuthorizedProjectDocuments:false,usePrivateModelWhenAvailable:true,clientTimeZone:"America/Los_Angeles",attachmentIds:[]}' > "$payload"
+            local status
+            status="$(auth_post '/api/celar-ai/v2/chat' "$payload" "$output")"
+            rm -f "$payload"
+            [[ "$status" == 200 ]] || fail "Celar AI current-fact UAT returned HTTP $status for: $question"
+            jq -e . "$output" >/dev/null || fail 'Celar AI current-fact UAT did not return JSON.'
+          }
+
+          ask_public_fact 'Who is the current President of the United States?' "$EVIDENCE_DIR/celar-president.json"
+          PRESIDENT="$(jq -r '.result.answer.directConclusion // empty' "$EVIDENCE_DIR/celar-president.json")"
+          [[ "$PRESIDENT" == *Donald*Trump* ]] || fail "Celar AI did not return the officially verified current President: $PRESIDENT"
+          [[ "$PRESIDENT" != *Biden* ]] || fail 'Celar AI returned the stale Biden answer.'
+          jq -e '.trust.authoritativeSourceCount >= 1 and .trust.providerResponseCount >= 0' "$EVIDENCE_DIR/celar-president.json" >/dev/null || fail 'President answer did not expose authoritative-source trust evidence.'
+
+          ask_public_fact 'Who is the CEO of US Signal?' "$EVIDENCE_DIR/celar-us-signal-ceo.json"
+          CEO="$(jq -r '.result.answer.directConclusion // empty' "$EVIDENCE_DIR/celar-us-signal-ceo.json")"
+          [[ "$CEO" == *Dan*Watts* ]] || fail "Celar AI did not return the officially verified US Signal CEO: $CEO"
+          [[ "$CEO" != *Matt*Rosenberg* ]] || fail 'Celar AI returned the known incorrect US Signal CEO answer.'
+          jq -e '.trust.authoritativeSourceCount >= 1' "$EVIDENCE_DIR/celar-us-signal-ceo.json" >/dev/null || fail 'US Signal CEO answer did not expose authoritative-source trust evidence.'
+
+          ask_public_fact 'How many projects does Kevin have assigned to him?' "$EVIDENCE_DIR/celar-kevin-project-count.json"
+          KEVIN_PROJECT_COUNT_ANSWER="$(jq -r '.result.answer.directConclusion // empty' "$EVIDENCE_DIR/celar-kevin-project-count.json")"
+          [[ "$KEVIN_PROJECT_COUNT_ANSWER" == *Kevin* ]] || fail "Celar AI did not resolve the unique authorized short-name identity Kevin: $KEVIN_PROJECT_COUNT_ANSWER"
+          [[ "$KEVIN_PROJECT_COUNT_ANSWER" =~ [0-9]+ ]] || fail "Celar AI did not return a numeric project count for Kevin: $KEVIN_PROJECT_COUNT_ANSWER"
+          [[ "${KEVIN_PROJECT_COUNT_ANSWER,,}" != *"could not verify"* && "${KEVIN_PROJECT_COUNT_ANSWER,,}" != *"could not resolve"* ]] \
+            || fail "Celar AI returned an unresolved or unverified answer for the unique Kevin identity: $KEVIN_PROJECT_COUNT_ANSWER"
+          jq -e '
+            .status == "completed"
+            and .trust.authoritativeSourceCount >= 1
+            and ((.result.answer.citationIds // []) | length >= 1)
+          ' "$EVIDENCE_DIR/celar-kevin-project-count.json" >/dev/null || fail 'Kevin project-count answer did not expose completed authoritative internal-source evidence.'
+          echo "CELAR_AI_KEVIN_PROJECT_COUNT_UAT=PASSED answer=$KEVIN_PROJECT_COUNT_ANSWER"
+
+          for stability_attempt in $(seq 1 5); do
+            ask_public_fact 'What is the purpose of Project FlowHive?' "$EVIDENCE_DIR/celar-stability-$stability_attempt.json"
+            jq -e '((.result.answer.directConclusion // "") | length) > 0' "$EVIDENCE_DIR/celar-stability-$stability_attempt.json" >/dev/null || fail "Celar AI stability attempt $stability_attempt returned no answer."
+          done
+          echo 'CELAR_AI_STABILITY_UAT=PASSED calls=5 forbiddenHttp=502,503,504'
+
+          PORTAL_HTML="$RUNNER_TEMP/systemwide-reliability-test-portal.html"
+          FRONTEND_BUNDLE="$RUNNER_TEMP/systemwide-reliability-test-assets.txt"
+          FRONTEND_CONVERGENCE_LOG="$EVIDENCE_DIR/served-frontend-convergence.log"
+          : > "$FRONTEND_CONVERGENCE_LOG"
+          FRONTEND_READY=false
+          for attempt in $(seq 1 36); do
+            CACHE_BUSTER="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}"
+            PORTAL_STATUS="$(curl -sS --max-time 60 -o "$PORTAL_HTML" -w '%{http_code}'               -H 'Cache-Control: no-cache, no-store, max-age=0'               -H 'Pragma: no-cache'               "$BASE/?release_check=$CACHE_BUSTER" || true)"
+            FRONTEND_ASSETS=()
+            MISSING_MARKERS=()
+            ASSET_FETCH_OK=true
+
+            if [[ "$PORTAL_STATUS" == 200 ]]; then
+              mapfile -t FRONTEND_ASSETS < <(grep -oE '(src|href)="[^"]+\.(js|css)(\?[^"]*)?"' "$PORTAL_HTML"                 | sed -E 's/^(src|href)="([^"]+)"$/\2/'                 | sort -u)
+              if (( ${#FRONTEND_ASSETS[@]} > 0 )); then
+                : > "$FRONTEND_BUNDLE"
+                for asset in "${FRONTEND_ASSETS[@]}"; do
+                  case "$asset" in
+                    /assets/*)
+                      ASSET_URL="$BASE$asset"
+                      case "$ASSET_URL" in
+                        *\?*) ASSET_URL+="&release_check=$CACHE_BUSTER" ;;
+                        *) ASSET_URL+="?release_check=$CACHE_BUSTER" ;;
+                      esac
+                      if ! curl -fsS --max-time 90                         -H 'Cache-Control: no-cache, no-store, max-age=0'                         -H 'Pragma: no-cache'                         "$ASSET_URL" >> "$FRONTEND_BUNDLE"; then
+                        ASSET_FETCH_OK=false
+                        printf 'attempt=%s assetFetchFailed=%s\n' "$attempt" "$asset" >> "$FRONTEND_CONVERGENCE_LOG"
+                        break
+                      fi
+                      ;;
+                    *)
+                      ASSET_FETCH_OK=false
+                      printf 'attempt=%s unexpectedAsset=%s\n' "$attempt" "$asset" >> "$FRONTEND_CONVERGENCE_LOG"
+                      break
+                      ;;
+                  esac
+                done
+
+                if [[ "$ASSET_FETCH_OK" == true ]]; then
+                  for marker in \
+                    'pulse-display-utility-dock' \
+                    'Evidence score' \
+                    'Project Cost Alerts' \
+                    'Data incomplete' \
+                    'Select or type a customer' \
+                    'Inside Sales Representative' \
+                    'FlowHive enterprise controls are temporarily unavailable.' \
+                    'You can leave this page while FlowHive works. The plan continues on the server.' \
+                    'flowhive-ai-progress-explanation' \
+                    'background:var(--flowhive-surface)' \
+                    'AUTHORITATIVE_RBAC_MODULE_DIRECTORY_V1' \
+                    'VISIBLE_AUTHORIZED_NAVIGATION_SNAPSHOT_V1' \
+                    '--project-workload-responsive-metrics:1' \
+                    'Login, logout & sessions'; do
+                    grep -Fq -- "$marker" "$FRONTEND_BUNDLE" || MISSING_MARKERS+=("$marker")
+                  done
+                fi
+              else
+                ASSET_FETCH_OK=false
+              fi
+            else
+              ASSET_FETCH_OK=false
+            fi
+
+            printf 'attempt=%s portalStatus=%s assetCount=%s assetFetchOk=%s missingCount=%s\n' \
+              "$attempt" "$PORTAL_STATUS" "${#FRONTEND_ASSETS[@]}" "$ASSET_FETCH_OK" "${#MISSING_MARKERS[@]}" \
+              >> "$FRONTEND_CONVERGENCE_LOG"
+            for marker in "${MISSING_MARKERS[@]}"; do
+              printf 'attempt=%s missingMarker=%s\n' "$attempt" "$marker" >> "$FRONTEND_CONVERGENCE_LOG"
+            done
+
+            if [[ "$PORTAL_STATUS" == 200 \
+              && "$ASSET_FETCH_OK" == true \
+              && ${#FRONTEND_ASSETS[@]} -gt 0 \
+              && ${#MISSING_MARKERS[@]} -eq 0 ]]; then
+              FRONTEND_READY=true
+              echo "PROTECTED_TEST_FRONTEND_CONVERGED attempt=$attempt assets=${#FRONTEND_ASSETS[@]}"
+              break
+            fi
+            (( attempt < 36 )) && sleep 5
+          done
+
+          if [[ "$FRONTEND_READY" != true ]]; then
+            tail -n 200 "$FRONTEND_CONVERGENCE_LOG" >&2 || true
+            fail 'Protected Test frontend did not converge to the required served bundle after 36 attempts.'
+          fi
+
+          API_AFTER="$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" -o json --only-show-errors)"
+          WEB_AFTER="$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_WEB_APP" -o json --only-show-errors)"
+          ACTIVE_API_IMAGE="$(jq -r '.properties.template.containers[0].image' <<<"$API_AFTER")"
+          ACTIVE_WEB_IMAGE="$(jq -r '.properties.template.containers[0].image' <<<"$WEB_AFTER")"
+          ACTIVE_SOURCE="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_SOURCE_COMMIT") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$API_AFTER")"
+          [[ "$ACTIVE_API_IMAGE" == "$EXPECTED_API_IMAGE" ]] || fail 'Active API image does not match the immutable release.'
+          [[ "$ACTIVE_WEB_IMAGE" == "$EXPECTED_WEB_IMAGE" ]] || fail 'Active web image does not match the immutable release.'
+          [[ "$ACTIVE_SOURCE" == "$TARGET_RELEASE_COMMIT" ]] || fail 'Active source marker does not match the authorized release.'
+
+          jq -n \
+            --arg source "$ACTIVE_SOURCE" \
+            --arg apiImage "$ACTIVE_API_IMAGE" \
+            --arg webImage "$ACTIVE_WEB_IMAGE" \
+            --arg projectId "$PROJECT_ID" \
+            --arg flowHiveRunId "$FLOWHIVE_RUN_ID" \
+            --arg forgePlanId "$PROJECT_FORGE_PLAN_ID" \
+            '{
+              status:"passed",
+              sourceCommit:$source,
+              apiImage:$apiImage,
+              webImage:$webImage,
+              migration086:"applied_and_verified",
+              migration088:"applied_and_verified",
+              migration093:"applied_and_verified",
+              migration094:"applied_and_verified",
+              migration095:"applied_and_verified",
+              migration096:"applied_and_verified",
+              migration097:"applied_and_verified",
+              migration098OwnerStorage:"applied_and_verified",
+              migration098CustomerSource:"applied_and_verified",
+              migration099:"applied_and_verified",
+              migration100:"applied_and_verified",
+              projectManagementSummary:true,
+              projectIntake:true,
+              opportunityDirectory:true,
+              opportunityDirectoryRole:"ENGINEERING",
+              billingSources:true,
+              costAlerts:true,
+              flowHiveEnterprise:true,
+              flowHiveProjectId:$projectId,
+              flowHiveAiPlanner:true,
+              flowHiveAiPlannerRunId:$flowHiveRunId,
+              flowHiveWorkingCopyOnly:true,
+              projectForgeAiPlanner:true,
+              projectForgeReviewPlanId:$forgePlanId,
+              projectForgeReviewOnly:true,
+              planDesignImplementValidateRelease:true,
+              estimatesCompressed:false,
+              celarStabilityCalls:5,
+              forbiddenHttpStatuses:[400,422,502,503,504],
+              auditAuthentication:true,
+              failedLoginAudited:true,
+              logoutAudited:true,
+              presidentOfficiallyVerified:true,
+              usSignalCeoOfficiallyVerified:true,
+              kevinShortNameResolved:true,
+              kevinProjectCountAnswered:true,
+              enterpriseResponsiveMarkers:true,
+              projectManagerModules:true,
+              projectManagerWorkRegister:true,
+              projectManagerApprovalAccess:true,
+              productionMutation:false
+            }' > "$EVIDENCE_DIR/uat-summary.json"
+          unset COORDINATOR_SESSION TEST_LOGIN_PASSWORD
+
+      - name: Run protected-Test assigned-work visibility UAT
+        id: assigned_work_uat
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (!cancelled() && (steps.uat.outcome == 'success' || steps.psa_live_uat.outputs.deployment_health_verified == 'true')) }}
+        shell: bash
+        working-directory: release
+        env:
+          TEST_LOGIN_PASSWORD: ${{ secrets.PROJECTPULSE_M087_PASSWORD }}
+          BASE: ${{ steps.contract.outputs.base }}
+          EVIDENCE_DIR: /tmp/systemwide-enterprise-reliability-test-evidence
+          RELIABILITY_RELEASE_COMMIT: ${{ env.TARGET_RELEASE_COMMIT }}
+        run: |
+          set -Eeuo pipefail
+          bash scripts/release-test/run-assigned-work-protected-test-uat.sh
+
+      - name: Run protected-Test utilization role-scoping UAT
+        id: utilization_uat
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (!cancelled() && (steps.uat.outcome == 'success' || steps.psa_live_uat.outputs.deployment_health_verified == 'true')) }}
+        shell: bash
+        working-directory: release
+        env:
+          TEST_LOGIN_PASSWORD: ${{ secrets.PROJECTPULSE_M087_PASSWORD }}
+          BASE: ${{ steps.contract.outputs.base }}
+          EVIDENCE_DIR: /tmp/systemwide-enterprise-reliability-test-evidence
+        run: |
+          set -Eeuo pipefail
+          bash scripts/release-test/run-utilization-role-scoping-protected-test-uat.sh
+
+      - name: Enable exact-run Module 025 protected-Test authorization fixture
+        id: module025_fixture
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (!cancelled() && inputs.acceptance_scope != 'sow_exports' && steps.psa_admission.outputs.authorized != 'true' && (steps.uat.outcome == 'success' || steps.sow_role_uat.outcome == 'success')) }}
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          API_JSON="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' -o json --only-show-errors)"
+          CURRENT_FIXTURE_STATE="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED") | .value // empty] | if length == 1 then .[0] else "false" end' <<<"$API_JSON")"
+          CURRENT_FIXTURE_EXPIRES_AT="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_EXPIRES_AT") | .value // empty] | if length == 1 then .[0] else "0" end' <<<"$API_JSON")"
+          if [[ "$CURRENT_FIXTURE_STATE" == 'true' && "$CURRENT_FIXTURE_EXPIRES_AT" =~ ^[0-9]+$ ]] \
+            && (( CURRENT_FIXTURE_EXPIRES_AT > $(date +%s) )); then
+            fail 'A prior unexpired Module 025 protected-Test authorization fixture remains enabled.'
+          fi
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          FIXTURE_EXPIRES_AT="$(( $(date +%s) + 2700 ))"
+          echo "expires_at=$FIXTURE_EXPIRES_AT" >> "$GITHUB_OUTPUT"
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' \
+            --set-env-vars \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED=true \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_RUN_ID="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_SOURCE_COMMIT="$TARGET_RELEASE_COMMIT" \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_EXPIRES_AT="$FIXTURE_EXPIRES_AT" \
+            --revision-suffix "m025e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output none --only-show-errors
+          API_REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh \
+            '${{ vars.AZURE_RESOURCE_GROUP }}' '${{ vars.AZURE_API_APP }}' "$API_REVISION" '${{ steps.build.outputs.api_image }}' 60 10
+          ENABLED_JSON="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' -o json --only-show-errors)"
+          [[ "$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$ENABLED_JSON")" == 'true' ]]
+          [[ "$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_RUN_ID") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$ENABLED_JSON")" == "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ]]
+          [[ "$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_SOURCE_COMMIT") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$ENABLED_JSON")" == "$TARGET_RELEASE_COMMIT" ]]
+          [[ "$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_EXPIRES_AT") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$ENABLED_JSON")" == "$FIXTURE_EXPIRES_AT" ]]
+          echo "MODULE025_PROTECTED_TEST_UAT_FIXTURE=enabled revision=$API_REVISION run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+      - name: Run protected-Test Module 025 SOW/GSD generation lifecycle UAT
+        id: module025_uat
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (!cancelled() && steps.psa_admission.outputs.authorized != 'true' && steps.module025_fixture.outcome == 'success') }}
+        shell: bash
+        working-directory: release
+        env:
+          TEST_LOGIN_PASSWORD: ${{ secrets.PROJECTPULSE_M087_PASSWORD }}
+          BASE: ${{ steps.contract.outputs.base }}
+          EVIDENCE_DIR: /tmp/systemwide-enterprise-reliability-test-evidence
+          MODULE025_UAT_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          MODULE025_UAT_EXPIRES_AT: ${{ steps.module025_fixture.outputs.expires_at }}
+        run: |
+          set -Eeuo pipefail
+          bash scripts/release-test/run-module025-sow-gsd-protected-test-uat.sh
+
+      - name: Disable exact-run Module 025 protected-Test authorization fixture
+        id: module025_fixture_disabled
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (always() && steps.module025_fixture.outputs.started == 'true') }}
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' \
+            --set-env-vars \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED=false \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_RUN_ID=disabled \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_SOURCE_COMMIT=disabled \
+              PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_EXPIRES_AT=0 \
+            --revision-suffix "m025d-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --output none --only-show-errors
+          API_REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh \
+            '${{ vars.AZURE_RESOURCE_GROUP }}' '${{ vars.AZURE_API_APP }}' "$API_REVISION" '${{ steps.build.outputs.api_image }}' 60 10
+          DISABLED_JSON="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' -o json --only-show-errors)"
+          [[ "$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_MODULE025_PROTECTED_TEST_UAT_ENABLED") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$DISABLED_JSON")" == 'false' ]]
+          [[ "$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "PROJECTPULSE_SOURCE_COMMIT") | .value // empty] | if length == 1 then .[0] else empty end' <<<"$DISABLED_JSON")" == "$TARGET_RELEASE_COMMIT" ]]
+          jq -n \
+            --arg revision "$API_REVISION" \
+            --arg source "$TARGET_RELEASE_COMMIT" \
+            '{status:"disabled",revision:$revision,sourceCommit:$source,persistentRoleAssignmentMutation:false,productionMutation:false}' \
+            > "$EVIDENCE_DIR/module025-protected-test-uat-fixture-disabled.json"
+          echo "MODULE025_PROTECTED_TEST_UAT_FIXTURE=disabled revision=$API_REVISION"
+
+      - name: Verify normal Solution Architect browser and retained register
+        id: module025_normal_sa_browser
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && ((inputs.acceptance_scope == 'full' || inputs.acceptance_scope == 'sow_role') && steps.psa_admission.outputs.authorized != 'true' && steps.module025_uat.outcome == 'success' && steps.module025_fixture_disabled.outcome == 'success') }}
+        timeout-minutes: 50
+        shell: bash
+        working-directory: release
+        env:
+          BASE: ${{ steps.contract.outputs.base }}
+          PROJECTPULSE_M025_SA_EMAIL: ${{ secrets.PROJECTPULSE_M025_SA_EMAIL }}
+          PROJECTPULSE_M025_SA_PASSWORD: ${{ secrets.PROJECTPULSE_M025_SA_PASSWORD }}
+          MODULE025_GENERATION_TIMEOUT_SECONDS: '2520'
+          MODULE025_REGISTER_MODE: retained-sa
+          MODULE025_SOURCE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          jq -e --arg source "$TARGET_RELEASE_COMMIT" '.status == "disabled" and .sourceCommit == $source' "$EVIDENCE_DIR/module025-protected-test-uat-fixture-disabled.json" >/dev/null
+          # Scoped SOW acceptance already created this run's normal-SA record.
+          if [[ "$ACCEPTANCE_SCOPE" == full ]]; then
+            "$RUNNER_TEMP/flowhive-psa-browser/bin/python" scripts/release-test/run-module025-installed-sa-uat.py
+          fi
+          jq -e --arg source "$TARGET_RELEASE_COMMIT" '.status == "passed" and .normalAuthorizedSolutionArchitect == true and .applicationSha == $source and .fixtureMutation == false' "$EVIDENCE_DIR/module025-installed-sa-uat.json" >/dev/null
+          "$RUNNER_TEMP/flowhive-psa-browser/bin/python" tests/module025-sow-register-browser.py \
+            > "$EVIDENCE_DIR/module025-normal-sa-register-browser.log"
+          grep -Fq 'MODULE025_REGISTER_BROWSER_DISPLAY=PASS' "$EVIDENCE_DIR/module025-normal-sa-register-browser.log"
+          jq -n --arg source "$TARGET_RELEASE_COMMIT" --arg run "$GITHUB_RUN_ID" \
+            '{status:"passed",sourceCommit:$source,sourceRunId:$run,normalAuthorizedSolutionArchitect:true,fixtureEnabled:false,authenticatedClicks:true,retainedHashesVerified:true,unauthorizedDownloadsRejected:true,reloadVerified:true}' \
+            > "$EVIDENCE_DIR/module025-normal-sa-browser.json"
+          echo 'MODULE025_RETAINED_VERSION_BROWSER_LIFECYCLE=PASS authorization=normal-solution-architect authenticatedClicks=true hashes=verified unauthorized=checked reload=verified'
+
+      - name: Restore exact prior Test images after application failure
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (failure() && (steps.deploy_api.outputs.started == 'true' || steps.deploy_web.outputs.started == 'true') && steps.uat.outputs.deployment_health_verified != 'true' && steps.psa_live_uat.outputs.deployment_health_verified != 'true' && steps.sow_role_uat.outputs.deployment_health_verified != 'true') }}
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' \
+            --image '${{ steps.contract.outputs.old_api_image }}' \
+            --set-env-vars PROJECTPULSE_SOURCE_COMMIT='${{ steps.contract.outputs.old_source }}' \
+            --revision-suffix "relra-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output none --only-show-errors
+          API_REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_API_APP }}' --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh '${{ vars.AZURE_RESOURCE_GROUP }}' '${{ vars.AZURE_API_APP }}' "$API_REVISION" '${{ steps.contract.outputs.old_api_image }}' 60 10
+
+          az containerapp update -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' \
+            --image '${{ steps.contract.outputs.old_web_image }}' \
+            --revision-suffix "relrw-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output none --only-show-errors
+          WEB_REVISION="$(az containerapp show -g '${{ vars.AZURE_RESOURCE_GROUP }}' -n '${{ vars.AZURE_WEB_APP }}' --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh '${{ vars.AZURE_RESOURCE_GROUP }}' '${{ vars.AZURE_WEB_APP }}' "$WEB_REVISION" '${{ steps.contract.outputs.old_web_image }}' 60 10
+          jq -n --arg apiImage '${{ steps.contract.outputs.old_api_image }}' --arg webImage '${{ steps.contract.outputs.old_web_image }}' --arg source '${{ steps.contract.outputs.old_source }}' '{rollbackCompleted:true,apiImage:$apiImage,webImage:$webImage,sourceCommit:$source,migrationsRemainApplied:true,productionMutation:false}' > "$EVIDENCE_DIR/rollback.json"
+
+      - name: Rollback protected Test API configuration on failure
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (failure() && steps.recovery_deploy_api.outputs.started == 'true' && (steps.recovery_verify.outcome != 'success' || steps.uat.outputs.deployment_health_verified != 'true')) }}
+        shell: bash
+        working-directory: release
+        run: |
+          set -Eeuo pipefail
+          RESOURCE_GROUP='${{ steps.recovery_snapshot.outputs.resource_group }}'
+          API_APP='${{ steps.recovery_snapshot.outputs.api_app }}'
+          TOUCHED=(
+            PROJECTPULSE_ENVIRONMENT PROJECTPULSE_SOURCE_COMMIT PROJECTPULSE_CELAR_AI_ENABLED PROJECTPULSE_CELAR_AI_DEPLOYMENT_MANAGED
+            PROJECTPULSE_CELAR_AI_TRAINING_ENABLED PROJECTPULSE_CELAR_AI_TRAINING_ENDPOINT PROJECTPULSE_CELAR_AI_TRAINING_HOST_ALLOWLIST PROJECTPULSE_CELAR_AI_TRAINING_BEARER_TOKEN
+            PROJECTPULSE_PULSE_AI_PRIVATE_RUNTIME_WORKER_ENABLED PROJECTPULSE_PULSE_AI_PRIVATE_RAG_ENABLED PROJECTPULSE_PRIVATE_INFERENCE_REQUIRED_FOR_DOCUMENTS PROJECTPULSE_PULSE_AI_RAG_REQUIRE_PRIVATE_MODEL
+            PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_ADDRESS_MODE PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_ENABLED PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_HOST PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_EXPECTED_IP
+            PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_APPROVAL_REFERENCE PROJECTPULSE_CELAR_AI_EXTERNAL_HTTPS_RUNTIME_READINESS_ENDPOINT
+            PROJECTPULSE_PRIVATE_INFERENCE_ENDPOINT PROJECTPULSE_PRIVATE_INFERENCE_MODEL PROJECTPULSE_PRIVATE_INFERENCE_AUTH_MODE PROJECTPULSE_PRIVATE_INFERENCE_BEARER_TOKEN PROJECTPULSE_PRIVATE_INFERENCE_BEARER_TOKEN_SECRET_REFERENCE
+            PROJECTPULSE_PRIVATE_EMBEDDING_ENDPOINT PROJECTPULSE_PRIVATE_EMBEDDING_MODEL PROJECTPULSE_PRIVATE_EMBEDDING_BEARER_TOKEN PROJECTPULSE_PRIVATE_EMBEDDING_BEARER_TOKEN_SECRET_REFERENCE
+            PROJECTPULSE_PRIVATE_OCR_ENDPOINT PROJECTPULSE_PRIVATE_OCR_MODEL PROJECTPULSE_PRIVATE_OCR_BEARER_TOKEN PROJECTPULSE_PRIVATE_OCR_BEARER_TOKEN_SECRET_REFERENCE
+            PROJECTPULSE_PRIVATE_MALWARE_SCAN_ENDPOINT PROJECTPULSE_PRIVATE_MALWARE_SCAN_BEARER_TOKEN PROJECTPULSE_PRIVATE_MALWARE_SCAN_BEARER_TOKEN_SECRET_REFERENCE
+            PROJECTPULSE_PRIVATE_ENDPOINT_HOST_ALLOWLIST PROJECTPULSE_PRIVATE_VECTOR_INDEX PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SCANNER_MODE
+            PROJECTPULSE_PULSE_AI_CLAMAV_HOST PROJECTPULSE_PULSE_AI_CLAMAV_PORT PROJECTPULSE_PULSE_AI_CLAMAV_TIMEOUT_SECONDS
+            PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SCAN_ATTESTED PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SIGNATURE_VERSION
+            PROJECTPULSE_PULSE_AI_DOCUMENT_MALWARE_SCAN_APPROVAL_REFERENCE PROJECTPULSE_PULSE_AI_DOCUMENT_EXTRACTION_PREVIEW_ENABLED
+          )
+          RESTORE=(); REMOVE=()
+          for name in "${TOUCHED[@]}"; do
+            row="$(jq -c --arg name "$name" '[.[] | select(.name == $name)] | if length == 1 then .[0] else empty end' "$RUNNER_TEMP/oracle-before-env.json")"
+            if [[ -z "$row" ]]; then REMOVE+=("$name"); continue; fi
+            secret="$(jq -r '.secretRef // empty' <<<"$row")"; value="$(jq -r '.value // empty' <<<"$row")"
+            if [[ -n "$secret" ]]; then RESTORE+=("$name=secretref:$secret"); else RESTORE+=("$name=$value"); fi
+          done
+          OLD_IMAGE="$(cat "$RUNNER_TEMP/oracle-before-image")"
+          UPDATE=(-g "$RESOURCE_GROUP" -n "$API_APP" --image "$OLD_IMAGE" --revision-suffix "caorrb-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output none --only-show-errors)
+          (( ${#RESTORE[@]} > 0 )) && UPDATE+=(--set-env-vars "${RESTORE[@]}")
+          (( ${#REMOVE[@]} > 0 )) && UPDATE+=(--remove-env-vars "${REMOVE[@]}")
+          az containerapp update "${UPDATE[@]}"
+          RESTORED_REVISION="$(az containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.latestRevisionName -o tsv --only-show-errors)"
+          bash scripts/wait-containerapp-ready-revision.sh "$RESOURCE_GROUP" "$API_APP" "$RESTORED_REVISION" "$OLD_IMAGE" 60 10
+          az containerapp secret remove -g "$RESOURCE_GROUP" -n "$API_APP" --secret-names "$TOKEN_SECRET_NAME" --output none --only-show-errors || true
+
+      - name: Upload protected-Test deployment evidence
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (always()) }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: systemwide-enterprise-reliability-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/systemwide-enterprise-reliability-test-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish protected-Test release summary
+        if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (always()) }}
+        shell: bash
+        run: |
+          {
+            echo '## System-wide Enterprise Reliability and Utilization — Protected Test'
+            echo
+            echo "- Application release: \`$TARGET_RELEASE_COMMIT\`"
+            echo '- Environment: protected Test only'
+            if [[ "$TARGET_RELEASE_BRANCH" == 'release/flowhive-sow-successor-20260908' ]]; then
+              echo '- Release lane: exact pre-merge FlowHive/SOW successor candidate; PR #887 remains unmerged'
+              [[ -f "$EVIDENCE_DIR/flowhive-psa-migrations.json" ]] && echo '- Migrations 103/104/105/106/107: applied and verified'
+              if jq -e '.status == "passed" and .functionalLifecycleVerified == true' "$EVIDENCE_DIR/flowhive-psa-live-uat.json" >/dev/null 2>&1; then
+                echo '- Live SOW-to-working-copy API and real browser reload: passed'
+              else
+                echo '- Live SOW-to-working-copy lifecycle: failed or not reached; inspect sanitized evidence'
+              fi
+              echo '- Actual per-provider model-call telemetry and semantic SOW/estimate approval: not yet established'
+              echo '- Full enterprise PSA feature acceptance: incomplete; this is not a release-completion claim'
+            fi
+            echo '- Target: https://phd-west-test.onenecklab.com'
+            if [[ "$ACCEPTANCE_SCOPE" == sow_exports ]]; then
+              echo '- Acceptance scope: saved task editing, draft SOW/GSD exports and My Role; no AI generation'
+              echo '- Generation quality, confirmation and SELL publication: not exercised in this scope'
+              echo '- Export acceptance outcome: ${{ steps.sow_role_uat.outcome }}'
+            fi
+            if [[ "$ACCEPTANCE_SCOPE" == sow_role ]]; then
+              echo '- Acceptance scope: Module 025 SOW/GSD and My Role; FlowHive generation was not invoked'
+              if [[ '${{ steps.sow_role_uat.outcome }}' == success ]]; then
+                echo '- Normal Solution Architect SOW/GSD lifecycle and My Role: passed'
+              else
+                echo '- Normal Solution Architect SOW/GSD lifecycle and My Role: failed or not completed'
+              fi
+            fi
+            [[ -f "$EVIDENCE_DIR/migrations.json" ]] && echo '- Migrations 086, 088, and 093 through 100: applied and verified' || echo '- Migrations 086, 088, and 093 through 100: not completed'
+            [[ -f "$EVIDENCE_DIR/uat-summary.json" ]] && echo '- Authenticated FlowHive, Project Forge, Celar AI, and system-wide functional UAT: passed' || echo '- Authenticated FlowHive, Project Forge, Celar AI, and system-wide functional UAT: not completed'
+            [[ -f "$EVIDENCE_DIR/module025-sow-gsd-protected-test-uat.json" ]] && echo '- Module 025 exact-run fixture API generation, review-ready P/D/I/V/R readback, and archive cleanup UAT: passed' || echo '- Module 025 SOW/GSD generation lifecycle UAT: not completed'
+            if [[ "$ACCEPTANCE_SCOPE" == full || "$ACCEPTANCE_SCOPE" == sow_role ]]; then
+              jq -e '.status == "passed"' "$EVIDENCE_DIR/module025-normal-sa-browser.json" >/dev/null 2>&1 && echo '- Normal Solution Architect browser lifecycle and retained register downloads: passed' || echo '- Normal Solution Architect browser lifecycle and retained register downloads: not completed'
+            fi
+            [[ -f "$EVIDENCE_DIR/utilization-role-scoping-uat.json" ]] && echo '- Kevin utilization role-scoping UAT: passed' || echo '- Kevin utilization role-scoping UAT: not completed'
+            [[ -f "$EVIDENCE_DIR/rollback.json" ]] && echo '- Application image rollback: completed'
+            if [[ -f "$EVIDENCE_DIR/deployment-health-verified.json" && ! -f "$EVIDENCE_DIR/rollback.json" ]]; then
+              echo '- Healthy Protected-Test candidate: preserved for direct diagnosis even if a later UAT gate fails'
+            fi
+            echo '- Production mutation: none'
+            echo '- Oracle/private AI runtime mutation: none'
+          } >> "$GITHUB_STEP_SUMMARY"

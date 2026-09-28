@@ -1,0 +1,257 @@
+# Reviewed legacy false positives; every exception binds one file and one exact match.
+# Default detection remains enabled. Values identify resources, artifacts, templates, or explicit negative tests.
+title = "Project Time Platform Development secret scanning"
+
+[extend]
+useDefault = true
+
+# Source: database/migrations/099_module025_sow_gsd_workspace.sql:45
+[[allowlists]]
+description = "GSD template identifier constrained by SQL CHECK"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)database/migrations/099_module025_sow_gsd_workspace\.sql$''']
+regexes = ['''^gsd_template_key = 'haea_staff_aug_gsd_kus_uvo_telematics_1'$''']
+
+# Source: deployment/azure/scripts/az06a-submit-west-container-apps-environment.sh:17
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az06a-submit-west-container-apps-environment\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-w3-7825cc"$''']
+
+# Source: deployment/azure/scripts/az05c2b1f-repair-eastus-keyvault-private-dns-zone-group-and-link.sh:12
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2b1f-repair-eastus-keyvault-private-dns-zone-group-and-link\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-eus-7825cc"$''']
+
+# Source: deployment/azure/scripts/az05c2a2-rocky10-fx4mds-restore-runner.sh:16
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2a2-rocky10-fx4mds-restore-runner\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-w3-7825cc"$''']
+
+# Source: deployment/azure/scripts/az05c2a1-rocky10-restore-runner-continuation.sh:22
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2a1-rocky10-restore-runner-continuation\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-w3-7825cc"$''']
+
+# Source: deployment/azure/scripts/az05c2b0-prepare-eastus-rocky10-runner.sh:11
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2b0-prepare-eastus-rocky10-runner\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-eus-7825cc"$''']
+
+# Source: deployment/environments/test.yml:12
+[[allowlists]]
+description = "Azure Container App service identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/environments/test\.yml$''']
+regexes = ['''^apiService: ca-phd-test-api-westus3$''']
+
+# Source: deployment/azure/scripts/az05c2b1-guest-postgresql-restore-validation.sh:16
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2b1-guest-postgresql-restore-validation\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-eus-7825cc"$''']
+
+# Source: deployment/azure/scripts/az05c2b1g-guest-keyvault-access-probe.sh:4
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2b1g-guest-keyvault-access-probe\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-eus-7825cc"$''']
+
+# Source: deployment/azure/scripts/az05c2b1-submit-postgresql-restore-validation.sh:17
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2b1-submit-postgresql-restore-validation\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-eus-7825cc"$''']
+
+# Source: deployment/azure/scripts/az08b-build-and-deploy-west-application.sh:22
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az08b-build-and-deploy-west-application\.sh$''']
+regexes = ['''^API_APP="ca-phd-test-api-westus3"$''']
+
+# Source: deployment/azure/scripts/az08c-continue-west-deployment-keyvault-bootstrap.sh:17
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az08c-continue-west-deployment-keyvault-bootstrap\.sh$''']
+regexes = ['''^API_APP="ca-phd-test-api-westus3"$''']
+
+# Source: deployment/recovery/module-042/RECOVERY-CHECKPOINT.md:105
+[[allowlists]]
+description = "OCI image reference with content digest"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/recovery/module-042/RECOVERY-CHECKPOINT\.md$''']
+regexes = ['''^API: `ca-phd-test-api-westus3--az12d3api-0713203653`$''']
+
+# Source: deployment/oracle-celar/health-check.sh:132
+[[allowlists]]
+description = "Incorrect-token negative health probe asserted to return HTTP 401"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/oracle-celar/health-check\.sh$''']
+regexes = ['''^curl -sS --max-time 15 "\$\{RESOLVE\[@\]\}" -o /dev/null -w '%\{http_code\}' \\
+  -H 'Authorization: Bearer intentionally-wrong-celar-health-token-value'$''']
+
+# Source: deployment/azure/scripts/az08e-repair-keyvault-private-dns-and-finish-west-deployment.sh:27
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az08e-repair-keyvault-private-dns-and-finish-west-deployment\.sh$''']
+regexes = ['''^API_APP="ca-phd-test-api-westus3"$''']
+
+# Source: deployment/azure/scripts/az05c2a-private-rocky10-restore-runner.sh:25
+[[allowlists]]
+description = "Azure Key Vault resource name"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)deployment/azure/scripts/az05c2a-private-rocky10-restore-runner\.sh$''']
+regexes = ['''^KEY_VAULT="kv-phd-t-w3-7825cc"$''']
+
+# Source: docs/azure-migration/checkpoints/AZ-08F-WEST-APPLICATION-HEALTHY-INTERNAL-ONLY-PUBLIC-ENTRY-PENDING.md:9
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/azure-migration/checkpoints/AZ-08F-WEST-APPLICATION-HEALTHY-INTERNAL-ONLY-PUBLIC-ENTRY-PENDING\.md$''']
+regexes = ['''^API: `ca-phd-test-api-westus3`$''']
+
+# Source: docs/azure-migration/checkpoints/AZ-05C3B1-EASTUS-POSTGRESQL-LOCATION-RESTRICTION-CONFIRMED.md:40
+[[allowlists]]
+description = "Azure subscription UUID identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/azure-migration/checkpoints/AZ-05C3B1-EASTUS-POSTGRESQL-LOCATION-RESTRICTION-CONFIRMED\.md$''']
+regexes = ['''^access for subscription:
+
+`cd32baeb-7b71-4bc0-8ea3-9f23a50903fe`$''']
+
+# Source: docs/deployment-evidence/pr477-customer-ui-test-deployment.json:12
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/deployment-evidence/pr477-customer-ui-test-deployment\.json$''']
+regexes = ['''^apiRevision": "ca-phd-test-api-westus3--u477api-30957382960-1"$''']
+
+# Source: docs/deployment-evidence/PR477_TEST_DEPLOYMENT.md:20
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/deployment-evidence/PR477_TEST_DEPLOYMENT\.md$''']
+regexes = ['''^API revision: `ca-phd-test-api-westus3--u477api-30957382960-1`$''']
+
+# Source: docs/modules/module-063-opportunities/README.md:93
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/modules/module-063-opportunities/README\.md$''']
+regexes = ['''^API revision: `ca-phd-test-api-westus3--m063api4-0717232631`$''']
+
+# Source: docs/modules/module-059-session-intelligence-global/README.md:56
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/modules/module-059-session-intelligence-global/README\.md$''']
+regexes = ['''^API revision: `ca-phd-test-api-westus3--m063api4-0717232631`$''']
+
+# Source: docs/modules/module-999-complete-user-guide/README.md:77
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/modules/module-999-complete-user-guide/README\.md$''']
+regexes = ['''^API revision: `ca-phd-test-api-westus3--m063api4-0717232631`$''']
+
+# Source: docs/releases/2026-08-02-consolidated-enterprise-validation.md:10
+[[allowlists]]
+description = "Git source commit SHA"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/releases/2026-08-02-consolidated-enterprise-validation\.md$''']
+regexes = ['''^Role-access source head: `6d2b5430d9c2fe634089bb37585e8f48e4a5b886`$''']
+
+# Source: docs/releases/module-083-test-release-20260809.md:39
+[[allowlists]]
+description = "Azure Container App service or revision identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)docs/releases/module-083-test-release-20260809\.md$''']
+regexes = ['''^API revision: `ca-phd-test-api-westus3--ffl83v3a-31336327016-1`$''']
+
+# Source: src/backend/ProjectTime.Api/Modules/CiCdPipelineModule.cs:213
+[[allowlists]]
+description = "Azure Container App default service identifier"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)src/backend/ProjectTime\.Api/Modules/CiCdPipelineModule\.cs$''']
+regexes = ['''^PROJECTPULSE_CICD_API_APP", "ca-phd-test-api-westus3"$''']
+
+# Source: src/backend/ProjectTime.Api/Modules/Module025SowGsdDocumentExporter.cs:13
+[[allowlists]]
+description = "GSD document template constant"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)src/backend/ProjectTime\.Api/Modules/Module025SowGsdDocumentExporter\.cs$''']
+regexes = ['''^HaeaGsdTemplateKey = "haea_staff_aug_gsd_kus_uvo_telematics_1"$''']
+
+# Source: tests/ConnectWiseSellApiTests/Program.cs:13
+[[allowlists]]
+description = "Unapproved URL port and path in credential-destination rejection test"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)tests/ConnectWiseSellApiTests/Program\.cs$''']
+regexes = ['''^sellapi\.quosalsell\.com:8443/api/quotes"$''']
+
+# Source: tests/connectwise-sell-release-scope.py:5
+[[allowlists]]
+description = "SHA-256 content fingerprint enforced by release-scope validator"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)tests/connectwise-sell-release-scope\.py$''']
+regexes = ['''^API-CONTRACT\.md': 'f8ab975961fa29545b482fa800d954251b7d0607fc20ecd787a66313bd288647'$''']
+
+# Source: tests/connectwise-sell-release-scope.py:5
+[[allowlists]]
+description = "SHA-256 content fingerprint enforced by release-scope validator"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)tests/connectwise-sell-release-scope\.py$''']
+regexes = ['''^CrmErpOAuthPersistence\.cs': 'f523304a52c40c07417db237f1fdb68ab3b6cdacfcf0c58d17ed803370ba844a'$''']
+
+# Source: tests/connectwise-sell-release-scope.py:5
+[[allowlists]]
+description = "SHA-256 content fingerprint enforced by release-scope validator"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(?:^|/)tests/connectwise-sell-release-scope\.py$''']
+regexes = ['''^ConnectWiseSellApiTests\.csproj': '10ef4a07d6e7e656530933c341ce1fb267427c96c7ceca28822fe481df10f289'$''']

@@ -1,0 +1,6 @@
+<Project>
+  <!-- Existing platform targets are retained byte-for-byte in the first import.
+       Keep the Module 025 register bridge isolated from unrelated generators. -->
+  <Import Project="$(MSBuildProjectDirectory)/build/PlatformRuntime.targets" />
+  <Import Project="$(MSBuildProjectDirectory)/build/Module025SowSell.targets" />
+</Project>
