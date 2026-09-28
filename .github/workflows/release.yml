@@ -41,7 +41,7 @@ jobs:
       api_digest: ${{ steps.api.outputs.digest }}
     steps:
       - name: Checkout (at the tag)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Derive version + image refs
         id: meta

@@ -82,7 +82,7 @@ jobs:
     steps:
       - name: Check out trusted main control plane for the PSA candidate
         if: ${{ (inputs.qualification_provider == '' || inputs.qualification_provider == 'none') && (github.event_name == 'workflow_dispatch' && inputs.release_branch == 'release/flowhive-sow-successor-20260908') }}
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           path: control
@@ -90,7 +90,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out exact authorized release
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_sha || github.sha }}
           path: release

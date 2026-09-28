@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -846,7 +846,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
@@ -879,7 +879,7 @@ jobs:
 
     steps:
       - name: Check out the exact requested candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
@@ -930,7 +930,7 @@ jobs:
     env:
       FLOWHIVE_CANDIDATE_ROOT: ${{ github.workspace }}/candidate
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: control
@@ -957,7 +957,7 @@ jobs:
             echo "sha=$(jq -er '.sha | select(test("^[a-f0-9]{40}$"))' .github/flowhive-psa-protected-test-candidate.json)" >> "$GITHUB_OUTPUT"
             echo 'staging=approved' >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.candidate.outputs.sha }}
           path: candidate
