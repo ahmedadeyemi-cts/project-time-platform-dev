@@ -56,7 +56,7 @@ jobs:
       DEPLOY_WORKFLOW_PATH: .github/workflows/projectpulse-deploy-test.yml
     steps:
       - name: Check out exact current main for durable fence restoration
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -240,7 +240,7 @@ jobs:
       RESTORED_RELEASE_SHA: 20c57ef8e10042decc438560d8f71c516b7f7838
     steps:
       - name: Check out exact current main for concurrency inventory
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -472,7 +472,7 @@ jobs:
       GHOST_CLEANUP_ELIGIBLE_AFTER: '2026-09-16T16:26:04Z'
     steps:
       - name: Check out exact current main for post-lock inventory
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
